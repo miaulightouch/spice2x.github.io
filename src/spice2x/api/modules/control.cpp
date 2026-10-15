@@ -121,8 +121,13 @@ namespace api::modules {
         if (!acquire_shutdown_privs())
             return error(res, "Unable to acquire shutdown privileges (Windows error " + std::to_string(GetLastError()) + ")");
 
-        // exit windows
-        if (!ExitWindowsEx(EWX_POWEROFF | EWX_FORCE,
+        // Keep the established hybrid-shutdown policy on non-XP builds.
+#if SPICE_XP
+        constexpr UINT shutdown_flags = EWX_POWEROFF | EWX_FORCE;
+#else
+        constexpr UINT shutdown_flags = EWX_SHUTDOWN | EWX_HYBRID_SHUTDOWN | EWX_FORCE;
+#endif
+        if (!ExitWindowsEx(shutdown_flags,
                            SHTDN_REASON_MAJOR_APPLICATION |
                            SHTDN_REASON_MINOR_MAINTENANCE))
             return error(res, "Unable to shutdown system (Windows error " + std::to_string(GetLastError()) + ")");

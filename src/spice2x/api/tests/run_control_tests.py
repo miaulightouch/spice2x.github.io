@@ -36,5 +36,6 @@ with tempfile.TemporaryDirectory(prefix='spice-control-test-') as tmp:
                '-DRAPIDJSON_HAS_STDSTRING', '-DFMT_HEADER_ONLY',
                '-I'+str(ROOT), '-I'+str(ROOT / 'api'), '-I'+str(ROOT / 'api/modules'), '-I'+str(ROOT / 'api/tests'),
                *sources, str(helper), str(ROOT / 'api/tests/control_test.cpp'), '-o', str(executable)]
-    subprocess.run(command, check=True)
-    subprocess.run([str(executable)], check=True)
+    for xp in (0, 1):
+        subprocess.run(command + ['-DSPICE_XP=' + str(xp)], check=True)
+        subprocess.run([str(executable)], check=True)

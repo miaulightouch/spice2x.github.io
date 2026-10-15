@@ -12,6 +12,10 @@ constexpr BOOL FALSE = 0;
 constexpr DWORD ERROR_SUCCESS = 0, ERROR_ACCESS_DENIED = 5, ERROR_NOT_ALL_ASSIGNED = 1300;
 constexpr DWORD TOKEN_ADJUST_PRIVILEGES = 32, TOKEN_QUERY = 8, SE_PRIVILEGE_ENABLED = 2;
 constexpr UINT EWX_POWEROFF = 8, EWX_REBOOT = 2, EWX_FORCE = 4;
+#if !SPICE_XP
+// Intentionally unavailable to XP test builds: any unguarded use must fail to compile.
+constexpr UINT EWX_SHUTDOWN = 1, EWX_HYBRID_SHUTDOWN = 0x00400000;
+#endif
 constexpr DWORD SHTDN_REASON_MAJOR_APPLICATION = 0x40000, SHTDN_REASON_MINOR_MAINTENANCE = 1;
 constexpr auto SE_SHUTDOWN_NAME = "SeShutdownPrivilege";
 struct TOKEN_PRIVILEGES { DWORD PrivilegeCount; struct { int Luid; DWORD Attributes; } Privileges[1]; };

@@ -601,8 +601,6 @@ set(SOURCE_FILES ${SOURCE_FILES}
         hooks/graphics/nvapi_impl.cpp
         hooks/graphics/nvapi_hook.cpp
         hooks/graphics/nvenc_hook.cpp
-        hooks/graphics/backends/opengl/opengl_backend.cpp
-        hooks/graphics/backends/opengl/opengl_resize.cpp
         hooks/graphics/backends/d3d9/d3d9_backend.cpp
         hooks/graphics/backends/d3d9/d3d9_readback.cpp
         hooks/graphics/backends/d3d9/d3d9_screenshot.cpp
@@ -774,6 +772,14 @@ set(SOURCE_FILES ${SOURCE_FILES}
         util/deferlog.cpp
         util/socd_cleaner.cpp
 )
+
+# Legacy WGL hooks are currently validated only for the XP build path.
+# Non-XP targets must not compile or initialize this experimental backend.
+if(SPICE_XP)
+    list(APPEND SOURCE_FILES
+            hooks/graphics/backends/opengl/opengl_backend.cpp
+            hooks/graphics/backends/opengl/opengl_resize.cpp)
+endif()
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} PREFIX "Source Files" FILES ${SOURCE_FILES})
 

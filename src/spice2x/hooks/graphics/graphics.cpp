@@ -23,7 +23,9 @@
 #include "games/popn/popn.h"
 #include "hooks/graphics/jpeg_encoder.h"
 #include "hooks/graphics/backends/d3d9/d3d9_backend.h"
+#if SPICE_XP
 #include "hooks/graphics/backends/opengl/opengl_backend.h"
+#endif
 #include "hooks/graphics/backends/d3d11/d3d11_backend.h"
 #include "launcher/shutdown.h"
 #include "misc/hotkeys.h"
@@ -1331,7 +1333,9 @@ void graphics_init() {
 
     // init backends
     graphics_d3d9_init();
+#if SPICE_XP
     graphics_opengl_init();
+#endif
     graphics_d3d11_init();
 
     // general hooks
