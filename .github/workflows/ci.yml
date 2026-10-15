@@ -1,4 +1,4 @@
-name: Publish validated XP OpenGL Release
+name: Publish validated calibration persistence release
 
 on:
   push:
@@ -14,14 +14,14 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_COMMIT: cfb79364912dffc28ecf64f21b66d3440da3ddc9
-      CI_HEAD_SHA: 15733aca07df522b6ea40a227d59439eed08d81a
-      CI_RUN_ID: '38786882041'
-      RELEASE_TAG: 26-10-16-xp-opengl.2
+      RELEASE_COMMIT: a27620a6b7d3c680723980e58e9dc05c625d6d58
+      CI_HEAD_SHA: b5382687f1d0b7c4a841e9912b68789f7a26b8ef
+      CI_RUN_ID: '38792598917'
+      RELEASE_TAG: 26-10-16-xp-opengl.3
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: cfb79364912dffc28ecf64f21b66d3440da3ddc9
+          ref: a27620a6b7d3c680723980e58e9dc05c625d6d58
           fetch-depth: 0
       - name: Verify successful CI and matching source tree
         run: |
@@ -59,6 +59,8 @@ jobs:
           XP 32-bit executables for an existing spice2x installation.
           Back up and replace the existing XP spice.exe and spicecfg.exe.
           Preserve existing game files, modules and launch arguments.
+          Remembers the saved calibration scene across game restarts.
+          Use -resizecfgpath for a path verified to survive Embedded write filters.
           Includes XP-compatible power-off and experimental legacy jubeat OpenGL
           calibration. WGL behavior, legacy GPU drivers and actual XP shutdown
           still require testing on the target machine.
@@ -68,24 +70,32 @@ jobs:
       - name: Publish prerelease
         run: |
           cat > "$RUNNER_TEMP/resize-api-release-notes.md" <<'NOTES'
-          Scopes XP-specific fixes to SPICE_XP builds and retains shared correctness fixes.
+          Calibration now restores the selected scene after restarting the game.
 
-          - XP builds use compatible power-off flags; non-XP builds retain their existing hybrid-shutdown policy.
-          - Native shutdown/reboot errors include Windows error codes.
-          - Shutdown privilege handles are cleaned up and failures are checked.
-          - A jubeat-only OpenGL 1.1 transform is compiled and initialized only with SPICE_XP. It applies scale, offsets, filtering
-            and duplication at buffer swap, preserving game rendering state
-            in a separate context. Existing native I/O and launch arguments are retained.
-          - The `-winxp.zip` contains the XP 32-bit spice.exe and spicecfg.exe.
-            Back up the existing executables before replacing them. The standard
-            ZIP contains the regular binaries; the full ZIP also includes XP extras.
+          - Saves and reloads the active scene along with all four scene settings, enabled state, and filtering.
+          - Legacy files without an active scene still default to Scene 1. Invalid indices fall back safely.
+          - After upgrading, select the desired scene and save once.
+          - Embedded XP EWF/FBWF can still discard accepted file writes after a full reboot.
+            Use the existing -resizecfgpath override with a location verified to survive reboot;
+            see docs/Fork-setup.md for diagnosis. This release does not change write-filter settings.
+          - README and usage notes document only this fork's additions, following Proton-BM's style.
+          - The hosted Web controller has a more compact layout and English, Traditional Chinese,
+            Simplified Chinese, Japanese, and Korean interfaces. Web assets update separately.
 
-          Validation: all existing CI builds, 145 production resize checks,
-          400 concurrent updates, inert native control/privilege regression tests,
-          and real Mesa EGL pixel tests for scaling, offsets and duplication. The control tests cover both SPICE_XP=0 and SPICE_XP=1; compiler logs confirm no OpenGL source builds outside XP.
-          WGL hooks, ATI legacy drivers and actual Windows XP power-off still
-          need target-machine testing. This is an experimental prerelease.
-          See PR #3. Main and the source PR have no workflow changes. Existing revision 1 XP executables retain the same XP behavior and can continue to be tested.
+          Scene persistence is shared config behavior across Windows builds. XP-specific WGL hooks
+          and power-off flags remain guarded by SPICE_XP; non-XP shutdown policy is unchanged.
+
+          The -winxp.zip contains XP 32-bit spice.exe and spicecfg.exe for an existing installation.
+          Back up and replace those executables, preserving game data and launch arguments.
+          The standard archive contains regular binaries; the full archive includes XP extras.
+
+          Validation: existing GNU/XP and MSVC CI builds, 161 production resize/config checks,
+          400 concurrent updates, and the native control/privilege checks for SPICE_XP=0 and 1.
+          Web: 33 tests, Vue/TypeScript checks, production build, and live five-language demo checks.
+          The user verified the previous XP OpenGL transform on the target cabinet; this new scene
+          persistence fix still needs a target-machine restart check. No Windows runtime test is claimed.
+          See PR #4. Main and the source PR have no workflow changes.
+
           NOTES
           printf '\nCI: https://github.com/%s/actions/runs/%s\n' "$GH_REPO" "$CI_RUN_ID" \
             >> "$RUNNER_TEMP/resize-api-release-notes.md"
@@ -94,6 +104,6 @@ jobs:
             "$RUNNER_TEMP/spice2x-$RELEASE_TAG-full.zip" \
             "$RUNNER_TEMP/spice2x-$RELEASE_TAG-winxp.zip" \
             --target "$RELEASE_COMMIT" \
-            --title "spice2x XP-scoped fixes and OpenGL calibration (revision 2)" \
+            --title "spice2x calibration persistence (revision 3)" \
             --notes-file "$RUNNER_TEMP/resize-api-release-notes.md" \
             --prerelease
