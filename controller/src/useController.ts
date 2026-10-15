@@ -140,7 +140,14 @@ export function useController() {
     if (enabled !== undefined) state.enabled = enabled;
     if (linear_filter !== undefined) state.linear_filter = linear_filter;
     ++revision; applying.value = true; error.value = '';
-    queue.update({ ...patch, scene: target });
+    const queued: ResizePatch = { ...patch, scene: target };
+    // A later edit to either axis must replace BOTH pending scale fields. Otherwise
+    // coalescing X then Y can send unequal values that the native API rejects.
+    if (scene.keep_aspect_ratio && (patch.scale_x !== undefined || patch.scale_y !== undefined || patch.keep_aspect_ratio === true)) {
+      queued.scale_x = scene.scale_x;
+      queued.scale_y = scene.scale_y;
+    }
+    queue.update(queued);
   }
   async function selectScene(scene: number): Promise<void> {
     if (!resize.value || !api.value) return;

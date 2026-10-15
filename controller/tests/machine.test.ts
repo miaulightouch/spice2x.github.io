@@ -6,8 +6,9 @@ import { WebSocketServer } from 'ws';
 import { Rc4 } from '../src/api/rc4';
 import { DemoApi } from '../src/api/demo';
 import { useController } from '../src/useController';
+import type { ResizePatch, ResizeState } from '../src/api/resize';
 
-async function machine(mode: 'ok' | 'reject' | 'close' | 'resize-error', password = 'secret') {
+async function machine(mode: 'ok' | 'reject' | 'close' | 'resize-error' | 'strict-aspect', password = 'secret') {
   const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   await once(server, 'listening');
   const seen: string[] = [];
@@ -25,6 +26,15 @@ async function machine(mode: 'ok' | 'reject' | 'close' | 'resize-error', passwor
       if (system && mode === 'close') { socket.close(); return; }
       const errors = system && mode === 'reject' ? ['Unable to acquire shutdown privileges'] :
         mode === 'resize-error' && request.function === 'image_resize_set' ? ['resize rejected'] : [];
+      if (mode === 'strict-aspect' && request.function === 'image_resize_set') {
+        const state = (await api.request('resize', 'image_resize_get'))[0] as ResizeState;
+        const patch = request.params[0] as ResizePatch;
+        const scene = state.scenes[(patch.scene ?? state.scene) - 1]!;
+        if ((patch.keep_aspect_ratio ?? scene.keep_aspect_ratio) && patch.scale_x !== undefined &&
+            patch.scale_y !== undefined && patch.scale_x !== patch.scale_y) {
+          errors.push('scale_x and scale_y must match when keeping aspect ratio');
+        }
+      }
       const data = errors.length ? [] : refresh ? ['session-key'] : await api.request(request.module, request.function, request.params);
       const out = encoder.encode(JSON.stringify({ id: request.id, errors, data }) + '\0');
       socket.send(cipher ? cipher.crypt(out) : out);
@@ -83,5 +93,27 @@ test('failed background calibration cannot be reported as successfully saved', a
     assert.match(c.error.value, /resize rejected/);
     await c.saveResize();
     assert.match(c.error.value, /校正未成功套用/); assert.ok(!m.seen.includes('image_resize_save'));
+  } finally { c.disconnect(); await m.close(); }
+});
+
+test('rapid edits to both scale axes honor the real API aspect-ratio constraint', async () => {
+  const m = await machine('strict-aspect'); const c = useController();
+  try {
+    await c.connect(m.profile);
+    c.updateResize({ keep_aspect_ratio: true });
+    c.updateResize({ scale_x: .91 });
+    c.updateResize({ scale_y: .94 });
+    await c.saveResize();
+    assert.equal(c.error.value, '');
+    assert.equal(c.currentScene.value.scale_x, .94);
+    assert.equal(c.currentScene.value.scale_y, .94);
+    assert.ok(m.seen.includes('image_resize_save'));
+    c.updateResize({ keep_aspect_ratio: false });
+    c.updateResize({ scale_x: .91 });
+    c.updateResize({ scale_y: .94 });
+    await c.saveResize();
+    assert.equal(c.error.value, '');
+    assert.equal(c.currentScene.value.scale_x, .91);
+    assert.equal(c.currentScene.value.scale_y, .94);
   } finally { c.disconnect(); await m.close(); }
 });
