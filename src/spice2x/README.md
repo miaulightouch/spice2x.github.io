@@ -310,8 +310,9 @@ which also means that your hex edits are applicable directly.
 
 #### Resize
 Image transforms are implemented on the Direct3D 9 path and on jubeat's legacy
-OpenGL path. OpenGL uses only 1.1 functions and a separate context; it supports
-XP, scaling, offsets, filtering and left/right duplication. The texture must fit
+OpenGL path in `SPICE_XP` builds. Non-XP builds neither compile nor initialize
+this experimental WGL backend. OpenGL uses only 1.1 functions and a separate
+context; it supports scaling, offsets, filtering and left/right duplication. The texture must fit
 the driver's maximum power-of-two texture size. Failures are logged under
 `graphics::opengl`. OpenGL screenshot/capture and overlay support are unchanged.
 Other rendering backends can store these settings without applying a transform.
@@ -376,8 +377,11 @@ The focused native regression tests can be run with Python 3 and a C++20 compile
 `python3 api/tests/run_resize_tests.py`. They compile the production API and config
 code with portable logging/file adapters; they do not test Direct3D rendering.
 `python3 api/tests/run_control_tests.py` tests the production power-control API and
-privilege helper against inert Win32 adapters, including XP-compatible power-off
-flags and Windows error propagation. The GL renderer has real pixel tests:
+privilege helper against inert Win32 adapters with `SPICE_XP=0` and `SPICE_XP=1`,
+including XP power-off flags, preserved non-XP hybrid-shutdown flags, Windows
+error propagation. Token cleanup, privilege validation
+and error reporting are shared fixes using the same Win32 API contracts on both
+build paths. The GL renderer has real pixel tests:
 `python3 hooks/graphics/backends/opengl/tests/run_render_tests.py` (Linux Mesa EGL,
 NumPy and a C++20 compiler). WGL hooks, legacy GPU drivers and actual Windows XP
 power-off still require testing on the target machine.

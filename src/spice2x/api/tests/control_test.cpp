@@ -14,7 +14,12 @@ static Document call(const std::string &function) {
 }
 int main() {
     auto result = call("shutdown");
-    assert(result["errors"].Empty()); assert(exit_flags == (EWX_POWEROFF | EWX_FORCE));
+    assert(result["errors"].Empty());
+#if SPICE_XP
+    assert(exit_flags == (EWX_POWEROFF | EWX_FORCE));
+#else
+    assert(exit_flags == (EWX_SHUTDOWN | EWX_HYBRID_SHUTDOWN | EWX_FORCE));
+#endif
     assert(stop_calls == 1); assert(open_calls == close_calls);
     result = call("reboot"); assert(result["errors"].Empty()); assert(exit_flags == (EWX_REBOOT | EWX_FORCE));
     const auto exits = exit_calls; const auto stops = stop_calls;
@@ -31,5 +36,6 @@ int main() {
     result = call("shutdown"); assert(!result["errors"].Empty()); assert(stop_calls == stops);
     assert(std::string(result["errors"][0].GetString()).find("87") != std::string::npos);
     result = call("exit"); assert(result["errors"].Empty()); assert(stop_calls == stops + 1);
-    std::cout << "Native control tests passed: XP power-off/reboot flags, privilege failures, token cleanup, Windows error codes, exit.\n";
+    std::cout << "Native control tests passed (SPICE_XP=" << SPICE_XP
+              << "): platform shutdown policy, privilege failures, token cleanup, Windows errors, exit.\n";
 }
