@@ -1,6 +1,6 @@
 
-const CACHE = "arcade-room-bde15ca715f6b389";
-const FILES = ["index.html","icon.svg","manifest.webmanifest","LICENSE.txt","THIRD_PARTY_NOTICES.txt","assets/index-Bb-HMHUA.css","assets/index-rYiBpfch.js"];
+const CACHE = "arcade-room-032e7f49709360af";
+const FILES = ["index.html","icon.svg","manifest.webmanifest","LICENSE.txt","THIRD_PARTY_NOTICES.txt","assets/index-Bb-HMHUA.css","assets/index-LTEFYsjx.js"];
 const ROOT = new URL('./', self.location.href);
 const URLS = FILES.map(path => new URL(path, ROOT).href);
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(URLS))));
