@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,12 @@ namespace fileutils {
     std::string text_read(const std::filesystem::path &file_path);
     bool bin_write(const std::filesystem::path &path, uint8_t *data, size_t len);
     std::vector<uint8_t> *bin_read(const std::filesystem::path &path);
+
+    // Opt-in root shared by XML and helper configs; absent preserves upstream lookup.
+    extern std::optional<std::filesystem::path> CONFIG_DIRECTORY;
+    std::filesystem::path expand_config_path(const std::filesystem::path &path);
+    std::filesystem::path executable_directory();
+    void set_config_directory(const std::string &directory, bool portable);
 
     std::filesystem::path get_config_file_path(const std::string module, const std::string filename, bool* file_exists=nullptr);
     bool write_config_file(const std::string_view &module, const std::filesystem::path path, std::string text);

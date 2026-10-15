@@ -48,6 +48,11 @@ with tempfile.TemporaryDirectory(prefix='spice-opengl-test-') as tmp:
 #include <dlfcn.h>
 using namespace graphics::opengl;
 extern "C" {
+bool needs_resize(float x, float y, int ox, int oy, int duplicate) {
+    cfg::fullscreen_setting scene; scene.scale_x=x; scene.scale_y=y;
+    scene.offset_x=ox; scene.offset_y=oy; scene.duplicate=static_cast<cfg::ScreenDuplicateMode>(duplicate);
+    return requires_resize(scene);
+}
 void *create() { return new ImageResize; }
 void destroy(void *state) { delete static_cast<ImageResize*>(state); }
 bool draw(void *state, int width, int height, float x, float y, int ox, int oy, int duplicate, bool linear) {
@@ -64,6 +69,11 @@ bool draw(void *state, int width, int height, float x, float y, int ox, int oy, 
         '-Wno-deprecated-declarations', '-shared', '-fPIC', '-I'+str(temp), '-I'+str(ROOT),
         str(BACKEND / 'opengl_resize.cpp'), str(bridge), '-ldl', '-o', str(output)], check=True)
     render = C.CDLL(str(output))
+    render.needs_resize.argtypes = [C.c_float, C.c_float, C.c_int, C.c_int, C.c_int]
+    render.needs_resize.restype = C.c_bool
+    assert not render.needs_resize(1, 1, 0, 0, 0)
+    for scene in [(1.001,1,0,0,0),(1,.999,0,0,0),(1,1,1,0,0),(1,1,0,-1,0),(1,1,0,0,1),(1,1,0,0,2)]:
+        assert render.needs_resize(*scene)
     render.create.restype = C.c_void_p
     render.draw.argtypes = [C.c_void_p, C.c_int, C.c_int, C.c_float, C.c_float, C.c_int, C.c_int, C.c_int, C.c_bool]
     render.draw.restype = C.c_bool

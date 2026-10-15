@@ -25,6 +25,24 @@ Direct3D 9 uses the existing rendering path. `SPICE_XP` builds additionally supp
 
 Other rendering paths can accept settings without displaying the transform. OpenGL capture and overlay support are unchanged. The grid is a preview, and cabinet capture is a manually refreshed still image; neither is proof that the game rendered the saved transform.
 
+## Config paths and portable use
+
+Settings can be read and written anywhere the Windows account has permission:
+
+| Launch option | Storage |
+| --- | --- |
+| `-configdir "%APPDATA%\spice"` | Main `spicetools.xml` and helper settings in that directory |
+| `-configdir "E:\spice-config"` | The same files in any chosen directory |
+| `-portable` | The same files beside the running EXE, even when the working directory is elsewhere |
+| `-resizecfgpath "E:\profiles\screen.json"` | Override just the image-calibration file |
+| `-cfgpath "%APPDATA%\spice\custom.xml"` | Override just the main XML file |
+
+`-configdir` and `-portable` are command-line options, resolved before the main XML is read. Use the same option when launching the configurator separately. Per-file overrides take precedence over `-configdir`, which takes precedence over `-portable`. The shared root covers main XML, resize, patch manager, card manager, controller presets and camera settings. It does not redirect game NVRAM/data or logs.
+
+Environment variables are expanded by the program, including paths entered without a CMD wrapper. Missing variables retain Windows' normal unexpanded spelling. Relative directory/file overrides keep working-directory semantics; `-portable` always uses the EXE directory. Required directories are created when possible. An explicit root reads and writes only there; it does not silently import or fall back to old AppData files. To retain existing settings, copy `%APPDATA%\spicetools.xml` and the files inside `%APPDATA%\spice2x\` directly into the chosen directory before switching.
+
+Without these new options, upstream AppData and legacy lookup behavior is unchanged. A portable directory on a write-protected or write-filtered volume still needs an appropriate persistent location.
+
 ## Settings after restarting
 
 By default, the cabinet stores calibration in `%APPDATA%\spice2x\spicetools_screen_resize.json`; an existing legacy `%APPDATA%\spicetools_screen_resize.json` may be used instead. Settings are per game. Keep the same Windows account, config path, and game identity when restarting.
@@ -46,3 +64,13 @@ The application does not change EWF/FBWF settings. A successful save means the O
 The fork adds `resize.image_resize_get`, `resize.image_resize_set`, and `resize.image_resize_save`; see the [API reference](../src/spice2x/README.md#resize). The save API preserves existing window settings. Scene persistence and validation are shared code on all Windows builds; the WGL hook and XP power flags remain guarded by `SPICE_XP`.
 
 Web source is in `controller/` on the [`feature/web-controller`](https://github.com/miaulightouch/spice2x.github.io/tree/feature/web-controller/controller) branch. Built assets are deployed from `gh-pages`. See that directory's README for local development. This fork does not require changes to upstream GitHub Actions on the main branch.
+
+## OpenGL latency
+
+The XP OpenGL transform runs immediately before the existing buffer swap. It does not queue or deliberately delay a frame. Active scaling currently copies the framebuffer into a GPU texture, redraws it in a separate WGL context, and uses two `glFinish()` synchronization points to preserve ordering across contexts. These waits serialize work and can increase frame time; missing a refresh deadline can add a refresh interval of display latency. They may also reduce existing GPU queue depth, so CPU wait time is not a direct measurement of input-to-display latency.
+
+An identity scene (100% on both axes, zero offsets, no duplication) now bypasses the extra copy, draw, context switches and GPU waits. Filtering and aspect-lock flags alone do not prevent this bypass. Active transforms cache context-constant texture/buffer capabilities and avoid reapplying unchanged texture parameters. They retain the tested synchronization and compatibility path. A same-context pass could avoid cross-context waits, but requires preserving the game's shader/FBO/texture/fixed-function state and validating the legacy ATI driver. Simply removing `glFinish()` or replacing it with `glFlush()` is not a proven-safe latency fix. No millisecond or zero-latency claim is made without cabinet measurements.
+
+## Fork versions
+
+Release names, tags and archive bases use `<upstream version>-<build number>`, recorded in `FORK_VERSION` and validated by `python3 scripts/fork_version.py`. For example, `26-10-03-1` is the first build using the new convention for upstream version `26-10-03`; increment the build number for subsequent fork releases. The source base is upstream main `c83496776e4dfa06f286e483d21fd269c331505c` (2026-10-12), including upstream changes after release `26-10-03`. Release notes retain the exact source commit and upstream snapshot provenance. Existing historical tags remain available for old links.
