@@ -249,7 +249,63 @@ std::vector<uint8_t> *fileutils::bin_read(const std::filesystem::path &path) {
     return contents;
 }
 
+// Config path helpers. Kept together for the portable Win32-boundary regression test.
+std::optional<std::filesystem::path> fileutils::CONFIG_DIRECTORY;
+
+std::filesystem::path fileutils::expand_config_path(const std::filesystem::path &path) {
+    const auto input = path.wstring();
+    if (input.find(L'%') == std::wstring::npos) return path;
+    DWORD capacity = ExpandEnvironmentStringsW(input.c_str(), nullptr, 0);
+    while (capacity && capacity <= 32767) {
+        std::wstring expanded(capacity, L'\0');
+        const DWORD size = ExpandEnvironmentStringsW(input.c_str(), expanded.data(), capacity);
+        if (!size) break;
+        if (size > capacity) { capacity = size; continue; }
+        expanded.resize(size - 1); // Win32 includes the terminating NUL.
+        return std::filesystem::path(expanded);
+    }
+    log_fatal("cfg", "unable to expand config path (Windows error {})", GetLastError());
+    return {};
+}
+
+std::filesystem::path fileutils::executable_directory() {
+    // XP does not set LastError or terminate the string when this buffer is too small.
+    for (DWORD capacity = MAX_PATH; capacity <= 32768; capacity = capacity < 16384 ? capacity * 2 : 32768) {
+        std::wstring path(capacity, L'\0');
+        const DWORD length = GetModuleFileNameW(nullptr, path.data(), capacity);
+        if (!length) break;
+        if (length < capacity) {
+            path.resize(length);
+            return std::filesystem::path(path).parent_path();
+        }
+        if (capacity == 32768) break;
+    }
+    log_fatal("cfg", "unable to find executable directory (Windows error {})", GetLastError());
+    return {};
+}
+
+void fileutils::set_config_directory(const std::string &directory, bool portable) {
+    if (directory.empty() && !portable) return;
+    auto path = directory.empty() ? executable_directory() : expand_config_path(directory);
+    std::error_code error;
+    path = std::filesystem::absolute(path, error);
+    if (!error) std::filesystem::create_directories(path, error);
+    if (error) {
+        log_fatal("cfg", "unable to use config directory {}: {}", path, error.message());
+        return;
+    }
+    CONFIG_DIRECTORY = path;
+    log_info("cfg", "using config directory: {}", path);
+}
+
 std::filesystem::path fileutils::get_config_file_path(const std::string module, const std::string filename, bool* file_exists) {
+    if (CONFIG_DIRECTORY) {
+        const auto path = *CONFIG_DIRECTORY / filename;
+        const bool exists = fileutils::file_exists(path);
+        if (file_exists) *file_exists = exists;
+        if (exists) log_info(module, "loading config from: {}", path);
+        return path;
+    }
     // try %appdata%\spice2x path first, if it exists
     const auto appdata_spice2x = std::filesystem::path(_wgetenv(L"APPDATA")) / "spice2x" / filename;
     if (fileutils::file_exists(appdata_spice2x)) {
@@ -279,11 +335,14 @@ std::filesystem::path fileutils::get_config_file_path(const std::string module, 
 
 bool fileutils::write_config_file(const std::string_view &module, const std::filesystem::path path, std::string text) {
     // attempt to undo %appdata% expansion to hide user name
-    const auto appdata = std::filesystem::path(_wgetenv(L"APPDATA")).wstring();
     auto censored = path.wstring();
-    const auto substr_offset = censored.find(appdata);
-    if (substr_offset != std::string::npos) {
-        censored.replace(substr_offset, appdata.length(), L"%appdata%");
+    const auto appdata_env = _wgetenv(L"APPDATA");
+    if (appdata_env && *appdata_env) {
+        const auto appdata = std::filesystem::path(appdata_env).wstring();
+        const auto substr_offset = censored.find(appdata);
+        if (substr_offset != std::string::npos) {
+            censored.replace(substr_offset, appdata.length(), L"%appdata%");
+        }
     }
 
     auto censored_display = fmt::detail::to_utf8<wchar_t>(censored, fmt::detail::to_utf8_error_policy::replace);

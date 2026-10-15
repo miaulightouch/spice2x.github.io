@@ -27,11 +27,20 @@ namespace graphics::opengl {
         }
     };
 
+    // Filtering/aspect flags alone do not change a pixel-aligned identity image.
+    inline bool requires_resize(const cfg::fullscreen_setting &scene) {
+        return scene.scale_x != 1.f || scene.scale_y != 1.f ||
+            scene.offset_x != 0 || scene.offset_y != 0 ||
+            scene.duplicate != cfg::ScreenDuplicateMode::None;
+    }
+
     // Owned by a private WGL context. Deleting that context releases its texture.
     struct ImageResize {
         GLuint texture = 0;
         int texture_width = 0;
         int texture_height = 0;
+        GLint maximum_texture_size = 0;
+        GLint texture_filter = 0;
 
         // Caller has made its private, default-state context current on the game drawable.
         bool draw(const GlApi &gl, int width, int height,

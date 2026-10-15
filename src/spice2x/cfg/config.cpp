@@ -1,6 +1,7 @@
 #include "config.h"
 #include "util/logging.h"
 #include "cfg/button.h"
+#include "util/fileutils.h"
 
 /*
  * This code absolutely sucks.
@@ -27,14 +28,21 @@ std::string CONFIG_PATH_OVERRIDE = "";
 Config::Config() {
     this->status = false;
     if (CONFIG_PATH_OVERRIDE.length() > 0) {
-        this->configLocation = CONFIG_PATH_OVERRIDE;
+        this->configLocation = fileutils::expand_config_path(CONFIG_PATH_OVERRIDE);
         log_info("cfg", "using custom config file: {}", this->configLocation);
+    } else if (fileutils::CONFIG_DIRECTORY) {
+        this->configLocation = fileutils::get_config_file_path("cfg", "spicetools.xml");
     } else {
         this->configLocation = std::filesystem::path(_wgetenv(L"APPDATA")) / L"spicetools.xml";
         // avoids logging the expanded appdata path as it contains user name
         log_info("cfg", "using global config file: %appdata%\\spicetools.xml");
     }
 
+    const auto parent = this->configLocation.parent_path();
+    if ((!CONFIG_PATH_OVERRIDE.empty() || fileutils::CONFIG_DIRECTORY) &&
+            !parent.empty() && !fileutils::dir_exists(parent) && !fileutils::dir_create_recursive(parent)) {
+        log_fatal("cfg", "unable to create config directory: {}", parent);
+    }
     this->configLocationTemp = this->configLocation;
     this->configLocationTemp.replace_extension(L"tmp");
 
