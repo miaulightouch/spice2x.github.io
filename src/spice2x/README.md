@@ -309,6 +309,14 @@ which also means that your hex edits are applicable directly.
   - returns information about the serial LCD controller some games use
 
 #### Resize
+Image transforms are implemented on the Direct3D 9 path and on jubeat's legacy
+OpenGL path. OpenGL uses only 1.1 functions and a separate context; it supports
+XP, scaling, offsets, filtering and left/right duplication. The texture must fit
+the driver's maximum power-of-two texture size. Failures are logged under
+`graphics::opengl`. OpenGL screenshot/capture and overlay support are unchanged.
+Other rendering backends can store these settings without applying a transform.
+A successful save confirms persistence, not rendering.
+
 - image_resize_enable(enable: bool)
   - enables or disables image resize state
 - image_resize_set_scene(scene: int)
@@ -367,6 +375,12 @@ protocol over TCP or WebSocket, not HTTP POST.
 The focused native regression tests can be run with Python 3 and a C++20 compiler:
 `python3 api/tests/run_resize_tests.py`. They compile the production API and config
 code with portable logging/file adapters; they do not test Direct3D rendering.
+`python3 api/tests/run_control_tests.py` tests the production power-control API and
+privilege helper against inert Win32 adapters, including XP-compatible power-off
+flags and Windows error propagation. The GL renderer has real pixel tests:
+`python3 hooks/graphics/backends/opengl/tests/run_render_tests.py` (Linux Mesa EGL,
+NumPy and a C++20 compiler). WGL hooks, legacy GPU drivers and actual Windows XP
+power-off still require testing on the target machine.
 
 ## Video Stream
 

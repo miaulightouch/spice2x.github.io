@@ -74,7 +74,7 @@ namespace api::modules {
 
         // exit()
         if (req.params.Size() == 0) {
-            launcher::shutdown();
+            return launcher::shutdown();
         }
 
         // check code
@@ -119,13 +119,13 @@ namespace api::modules {
 
         // acquire privileges
         if (!acquire_shutdown_privs())
-            return error(res, "Unable to acquire shutdown privileges");
+            return error(res, "Unable to acquire shutdown privileges (Windows error " + std::to_string(GetLastError()) + ")");
 
         // exit windows
-        if (!ExitWindowsEx(EWX_SHUTDOWN | EWX_HYBRID_SHUTDOWN | EWX_FORCE,
+        if (!ExitWindowsEx(EWX_POWEROFF | EWX_FORCE,
                            SHTDN_REASON_MAJOR_APPLICATION |
                            SHTDN_REASON_MINOR_MAINTENANCE))
-            return error(res, "Unable to shutdown system");
+            return error(res, "Unable to shutdown system (Windows error " + std::to_string(GetLastError()) + ")");
 
         // terminate this process
         launcher::shutdown(0);
@@ -138,13 +138,13 @@ namespace api::modules {
 
         // acquire privileges
         if (!acquire_shutdown_privs())
-            return error(res, "Unable to acquire shutdown privileges");
+            return error(res, "Unable to acquire shutdown privileges (Windows error " + std::to_string(GetLastError()) + ")");
 
         // exit windows
         if (!ExitWindowsEx(EWX_REBOOT | EWX_FORCE,
                            SHTDN_REASON_MAJOR_APPLICATION |
                            SHTDN_REASON_MINOR_MAINTENANCE))
-            return error(res, "Unable to reboot system");
+            return error(res, "Unable to reboot system (Windows error " + std::to_string(GetLastError()) + ")");
 
         // terminate this process
         launcher::shutdown(0);
