@@ -1482,8 +1482,11 @@ void graphics_d3d9_on_present(
     // single point guaranteed to be after the game's last `EndScene` and before the real `Present`,
     // so the back buffer is fully drawn and the expensive StretchRect work happens exactly once per
     // frame. it must run before the overlay is rendered so the overlay isn't scaled with the image.
-    if (cfg::SCREENRESIZE->enable_screen_resize || GRAPHICS_FS_ORIENTATION_SWAP) {
-        SurfaceHook(device);
+    {
+        std::lock_guard<std::mutex> lock(cfg::SCREENRESIZE->image_mutex);
+        if (cfg::SCREENRESIZE->enable_screen_resize || GRAPHICS_FS_ORIENTATION_SWAP) {
+            SurfaceHook(device);
+        }
     }
 
     graphics_poll_screenshot_hotkey();

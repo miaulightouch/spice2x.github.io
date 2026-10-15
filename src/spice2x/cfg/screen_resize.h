@@ -5,6 +5,7 @@
 #include <string>
 #include <optional>
 #include <filesystem>
+#include <mutex>
 #include "external/rapidjson/document.h"
 
 namespace cfg {
@@ -47,6 +48,7 @@ namespace cfg {
         ~ScreenResize();
         
         // full screen (directx) image settings
+        std::mutex image_mutex;
         bool enable_screen_resize = false;
         int8_t screen_resize_current_scene = 0;
         bool enable_linear_filter = true;
@@ -79,7 +81,7 @@ namespace cfg {
         uint32_t window_deco_height = 0;
 
         void config_load();
-        void config_save();
+        bool config_save(bool image_only = false);
     };
 
     // globals

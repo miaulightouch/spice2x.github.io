@@ -37,6 +37,7 @@ namespace cfg {
     }
 
     void ScreenResize::config_load() {
+        std::lock_guard<std::mutex> lock(this->image_mutex);
         std::string config = fileutils::text_read(this->config_path);
         if (config.empty()) {
             log_info("ScreenResize", "config is empty");
@@ -179,7 +180,8 @@ namespace cfg {
         return false;
     }
 
-    void ScreenResize::config_save() {
+    bool ScreenResize::config_save(bool image_only) {
+        std::lock_guard<std::mutex> lock(this->image_mutex);
         rapidjson::Document doc;
         std::string config = fileutils::text_read(this->config_path);
         if (!config.empty()) {
@@ -214,15 +216,18 @@ namespace cfg {
             rapidjson::Pointer(root + prefix + "duplicate").Set(doc, scene.duplicate);
         }
 
-        // windowed mode settings
-        rapidjson::Pointer(root + "w_always_on_top").Set(doc, this->window_always_on_top);
-        rapidjson::Pointer(root + "w_enable_resize").Set(doc, this->enable_window_resize);
-        rapidjson::Pointer(root + "w_keep_aspect_ratio").Set(doc, this->client_keep_aspect_ratio);
-        rapidjson::Pointer(root + "w_border_type").Set(doc, this->window_decoration);
-        rapidjson::Pointer(root + "w_width").Set(doc, this->client_width);
-        rapidjson::Pointer(root + "w_height").Set(doc, this->client_height);
-        rapidjson::Pointer(root + "w_offset_x").Set(doc, this->window_offset_x);
-        rapidjson::Pointer(root + "w_offset_y").Set(doc, this->window_offset_y);
+        // The API only saves image settings; preserve existing window settings on disk.
+        if (!image_only) {
+            // windowed mode settings
+            rapidjson::Pointer(root + "w_always_on_top").Set(doc, this->window_always_on_top);
+            rapidjson::Pointer(root + "w_enable_resize").Set(doc, this->enable_window_resize);
+            rapidjson::Pointer(root + "w_keep_aspect_ratio").Set(doc, this->client_keep_aspect_ratio);
+            rapidjson::Pointer(root + "w_border_type").Set(doc, this->window_decoration);
+            rapidjson::Pointer(root + "w_width").Set(doc, this->client_width);
+            rapidjson::Pointer(root + "w_height").Set(doc, this->client_height);
+            rapidjson::Pointer(root + "w_offset_x").Set(doc, this->window_offset_x);
+            rapidjson::Pointer(root + "w_offset_y").Set(doc, this->window_offset_y);
+        }
 
         // build JSON
         rapidjson::StringBuffer buffer;
@@ -232,8 +237,10 @@ namespace cfg {
         // save to file
         if (fileutils::write_config_file("ScreenResize", this->config_path, buffer.GetString())) {
             // this->config_dirty = false;
+            return true;
         } else {
             log_warning("ScreenResize", "unable to save config file");
+            return false;
         }
     }
 }
