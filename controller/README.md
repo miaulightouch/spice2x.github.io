@@ -7,6 +7,7 @@ Vue 3 + TypeScript 的 SpiceAPI WebSocket 控制器。靜態網站，直接由�
 - 手機單欄、底部導覽；桌面雙欄。方向鍵固定十字排列，48px 操作區域。
 - 多機台設定：名稱、WebSocket 位址及選擇性記住 API 密碼。
 - SERVICE／TEST 脈衝、自動放開、解除按鍵覆寫、投幣。
+- 重啟遊戲、結束遊戲、重啟 Windows 與關機；需 API 密碼，操作前確認，斷線不自動重送。
 - 16 碼卡片、瀏覽器卡片清單、讀取機台預設卡片、P1／P2 數字鍵。
 - 四組場景、60–250% 獨立縮放、0.1% 微調、位移、等比例、線性濾波、畫面複製及儲存。
 - 獨立 WebSocket 畫面擷取；不支援 JPEG 的版本仍可使用校正數值與格線。
@@ -21,6 +22,8 @@ Vue 3 + TypeScript 的 SpiceAPI WebSocket 控制器。靜態網站，直接由�
 4. 「畫面」的調整會立即套用；「儲存到機台」才會寫入設定檔，需要機台啟用 API 密碼。重新啟動遊戲仍依 spice2x 設計回到場景 1。
 
 完整畫面校正需要 [Resize API 預發行版](https://github.com/miaulightouch/spice2x.github.io/releases/tag/26-10-16-resize-api.1) 或包含相同 API 的較新版本。這是遊戲影像縮放／位移，不會改變 Windows 視窗大小或輸出解析度。
+
+**調整會即時套用，儲存供下次啟動使用。** 修改場景數值或切換場景時會自動啟用縮放；明確取消「啟用縮放」後可儲存停用狀態。儲存後會讀回核對當前設定；這不代表已驗證設定檔或實際渲染結果。影像變形目前沿用 Direct3D 9 路徑，Direct3D 11 沒有接上這套校正。網站的「機台畫面擷取」是單張快照，校正後需按「更新機台畫面」重新擷取。
 
 新版 Chromium 可讓 HTTPS Pages 在使用者授權後連到 `ws://` 私有 IP、`localhost` 或 `.local` 主機。請優先使用私有 IP。一般自訂 DNS 名稱與其他瀏覽器可能需要有效 TLS 的 `wss://` 入口；spice2x 的原生 WebSocket 本身沒有 TLS。參考 [Chrome 本機網路存取說明](https://github.com/GoogleChrome/modern-web-guidance/blob/main/skills/modern-web-guidance/guides/security/local-network-access.md)。
 

@@ -34,6 +34,7 @@ export function useController() {
   let generation = 0;
   let revision = 0;
   let confirmed: ResizeState | undefined;
+  let resizeApplyError: Error | undefined;
 
   function notify(text: string): void { message.value = text; error.value = ''; }
   function report(value: unknown): void { error.value = asError(value).message; }
@@ -46,7 +47,7 @@ export function useController() {
     resize.value = undefined; resizeError.value = ''; buttons.value = []; confirmed = undefined;
     image.value = ''; imageTime.value = ''; game.value = ''; version.value = '';
     configuredPassword.value = false; applying.value = false; unsaved.value = false;
-    coinQueue.value = undefined; activeProfile = undefined;
+    coinQueue.value = undefined; activeProfile = undefined; resizeApplyError = undefined;
   }
 
   async function connect(profile: Profile): Promise<void> {
@@ -109,13 +110,13 @@ export function useController() {
       const sentRevision = revision;
       const state = parseResize(await rpc.request('resize', 'image_resize_set', [patch]));
       if (epoch !== generation) return;
-      confirmed = state;
+      confirmed = state; resizeApplyError = undefined;
       if (sentRevision === revision) { resize.value = structuredClone(state); applying.value = false; }
       unsaved.value = true;
       if (client) latency.value = client.latency;
     }, value => {
       if (epoch !== generation) return;
-      applying.value = false;
+      applying.value = false; resizeApplyError = asError(value);
       if (confirmed) resize.value = structuredClone(confirmed);
       report(value);
     });
@@ -123,6 +124,10 @@ export function useController() {
 
   function updateResize(patch: ResizePatch): void {
     if (!connected.value || !resize.value || !queue) return;
+    // Scene edits activate their transform; an explicit disable still wins.
+    if (patch.enabled === undefined && ['offset_x', 'offset_y', 'scale_x', 'scale_y', 'keep_aspect_ratio', 'duplicate'].some(key => key in patch)) {
+      patch = { ...patch, enabled: true };
+    }
     const state = resize.value;
     const target = patch.scene ?? state.scene;
     const scene = state.scenes[target - 1]!;
@@ -141,9 +146,9 @@ export function useController() {
     if (!resize.value || !api.value) return;
     await action('scene', async () => {
       await queue?.flush();
-      const state = parseResize(await api.value!.request('resize', 'image_resize_set', [{ scene }]));
-      resize.value = state; confirmed = structuredClone(state);
-      notify(`已切換場景 ${scene}`);
+      const state = parseResize(await api.value!.request('resize', 'image_resize_set', [{ scene, enabled: true }]));
+      resize.value = state; confirmed = structuredClone(state); unsaved.value = true; resizeApplyError = undefined;
+      notify(`已啟用並切換場景 ${scene}`);
     });
   }
   async function readResize(): Promise<void> {
@@ -151,7 +156,7 @@ export function useController() {
       const rpc = api.value!;
       await queue?.flush();
       const state = parseResize(await rpc.request('resize', 'image_resize_get'));
-      resize.value = state; confirmed = structuredClone(state); resizeError.value = '';
+      resize.value = state; confirmed = structuredClone(state); resizeError.value = ''; resizeApplyError = undefined;
       if (!queue) installQueue(rpc, generation);
       notify('已讀取機台目前的畫面設定');
     });
@@ -160,9 +165,43 @@ export function useController() {
     await action('save', async () => {
       if (!demo.value && !configuredPassword.value) throw new Error('寫入設定檔需要在 spice2x 啟用 API 密碼，並使用相同密碼連線。');
       await queue?.flush();
+      if (resizeApplyError) throw new Error(`校正未成功套用，請重新調整後再儲存：${resizeApplyError.message}`);
+      const expected = confirmed;
       await api.value!.request('resize', 'image_resize_save');
+      const state = parseResize(await api.value!.request('resize', 'image_resize_get'));
+      if (JSON.stringify(state) !== JSON.stringify(expected)) throw new Error('儲存後讀回的設定不同，請重新讀取並確認機台設定。');
       unsaved.value = false;
-      notify(demo.value ? '示範設定已儲存，未寫入機台。' : '已將四組場景寫入機台設定檔。');
+      resize.value = state; confirmed = structuredClone(state);
+      const saved = demo.value ? '示範設定已儲存，未寫入機台。' : '已將四組場景寫入機台設定檔。';
+      notify(saved + (state.enabled
+        ? `縮放已啟用，目前為場景 ${state.scene}。`
+        : '縮放尚未啟用，設定不會影響畫面；請勾選「啟用縮放」。'));
+    });
+  }
+
+  async function machineControl(command: 'restart' | 'exit' | 'reboot' | 'shutdown'): Promise<void> {
+    await action(command, async () => {
+      if (!demo.value && !configuredPassword.value) throw new Error('系統操作需要使用 API 密碼連線。');
+      const epoch = generation;
+      const rpc = api.value!;
+      const simulated = demo.value;
+      const label = { restart: '重新啟動遊戲', exit: '結束遊戲', reboot: '重新啟動機台', shutdown: '關閉機台' }[command];
+      await queue?.flush();
+      if (epoch !== generation) return;
+      try {
+        await rpc.request('control', command);
+      } catch (value) {
+        if (epoch !== generation) return;
+        if (value instanceof ApiError) throw value;
+        // Process termination can close the API before a response. Never retry.
+        disconnect();
+        message.value = `${label}要求後連線中斷；無法確認執行結果，請查看機台。未自動重送。`;
+        error.value = '';
+        return;
+      }
+      if (epoch !== generation) return;
+      if (!simulated) disconnect();
+      notify(simulated ? `示範：${label}，未送到機台。` : `機台已回應${label}要求；請查看機台，啟動完成後重新連線。`);
     });
   }
 
@@ -237,6 +276,6 @@ export function useController() {
   return { status, demo, message, error, busy, latency, game, version, buttons, coinQueue, resize, resizeError,
     applying, unsaved, image, imageTime, capturing, configuredPassword, connected,
     connect, startDemo, disconnect, notify, report, updateResize, selectScene, readResize, saveResize,
-    pulse, exactButton, releaseButtons, insertCoin, insertCard, getMachineCards, keypad, capture,
+    machineControl, pulse, exactButton, releaseButtons, insertCoin, insertCard, getMachineCards, keypad, capture,
     currentScene: computed(() => resize.value?.scenes[(resize.value?.scene ?? 1) - 1] ?? defaultScene()) };
 }

@@ -343,6 +343,22 @@ select {
 .section-toolbar .check {
   min-height: 32px;
 }
+.resize-inactive {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--soft);
+  color: var(--accent);
+  font-size: 13px;
+}
+.resize-inactive p {
+  flex: 1 1 180px;
+}
 .screen-preview {
   aspect-ratio: 1;
   position: relative;

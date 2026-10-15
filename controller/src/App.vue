@@ -111,6 +111,18 @@ async function readCards(): Promise<void> {
     c.notify(machineCards.value.length ? '已讀取機台設定的卡片。' : '機台目前沒有設定卡片。');
   } catch (value) { c.report(value); }
 }
+const systemActions = [
+  { command: 'restart', label: '重新啟動遊戲', detail: '沿用目前啟動參數重新開啟遊戲' },
+  { command: 'exit', label: '結束遊戲', detail: '關閉 spice2x；啟動腳本可能會自動重開' },
+  { command: 'reboot', label: '重新啟動機台', detail: '重新啟動整台 Windows 電腦' },
+  { command: 'shutdown', label: '關閉機台', detail: '關閉整台 Windows 電腦' },
+] as const;
+function confirmSystem(command: typeof systemActions[number]['command']): void {
+  const item = systemActions.find(item => item.command === command)!;
+  const warning = unsaved.value ? '\n尚有未儲存的校正設定，可能在遊戲結束後遺失。' : '';
+  const machine = profiles.value.find(item => item.id === selectedId.value)?.name ?? '機台';
+  if (window.confirm(`${demo.value ? '示範：' : ''}確定要對「${machine}」${item.label}？\n${item.detail}。${warning}`)) void c.machineControl(command);
+}
 function updateOnline(): void { offline.value = !navigator.onLine; }
 function newId(): string { return globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`; }
 window.addEventListener('online', updateOnline); window.addEventListener('offline', updateOnline);
@@ -147,17 +159,18 @@ onBeforeUnmount(() => {
 
     <main class="main-content">
       <section v-show="tab === 'screen'" aria-labelledby="screen-title">
-        <div class="page-title"><div><p class="eyebrow">SCREEN CALIBRATION</p><h1 id="screen-title">畫面校正</h1></div><span class="muted small" v-if="resize">{{ applying ? '套用中…' : unsaved ? '已套用 · 尚未儲存' : '機台設定' }}</span></div>
+        <div class="page-title"><div><p class="eyebrow">SCREEN CALIBRATION</p><h1 id="screen-title">畫面校正</h1></div><span class="muted small" v-if="resize">{{ applying ? '更新中…' : !resize.enabled ? '縮放未啟用' : unsaved ? '設定已更新 · 尚未儲存' : '機台設定' }}</span></div>
         <div v-if="!connected" class="empty-state"><h2>將畫面調整到剛剛好</h2><p>連線後可直接調整四組場景的縮放與位移。</p><div class="button-row"><button class="primary" @click="tab = 'system'">設定連線</button><button @click="c.startDemo()">試用示範模式</button></div></div>
         <div v-else-if="resizeError" class="empty-state"><h2>畫面校正暫不可用</h2><p>{{ resizeError }}</p><p class="small">新校正功能需要 Resize API 版本，並在遊戲初始化後使用。</p><div class="button-row"><button @click="c.readResize()" :disabled="!!busy">重新讀取</button><a class="button" href="https://github.com/miaulightouch/spice2x.github.io/releases/tag/26-10-16-resize-api.1" target="_blank" rel="noopener noreferrer">下載 API 版本</a></div></div>
         <div v-else-if="resize" class="calibration-layout">
           <div>
             <div class="section-toolbar"><h2>{{ !showGrid && image ? '機台畫面擷取' : '校正格線示意' }}</h2><label class="check"><input type="checkbox" :checked="resize.enabled" :disabled="controlsDisabled" @change="toggle('enabled', $event)">啟用縮放</label></div>
+            <div v-if="!resize.enabled" class="resize-inactive" role="status"><p>縮放目前關閉。調整位移、比例或選擇場景時會自動啟用；單純儲存不會啟用。</p><button class="primary compact" :disabled="controlsDisabled" @click="c.updateResize({ enabled: true })">啟用縮放</button></div>
             <div class="screen-preview" :class="{ 'is-capture': !showGrid && image }">
               <template v-if="showGrid || !image"><div class="target-frame" aria-hidden="true"></div><div class="calibration-board" :style="boardStyle" role="img" aria-label="四乘四校正格線示意"><div v-for="n in 16" :key="n">{{ String(n).padStart(2, '0') }}</div></div><span class="preview-caption">格線僅為示意，實際效果請看機台畫面</span></template>
               <img v-else :src="image" alt="機台最後一次擷取的畫面">
             </div>
-            <div class="preview-toolbar"><button class="quiet compact" :disabled="capturing || demo" @click="capture">{{ capturing ? '擷取中…' : '更新機台畫面' }}</button><button v-if="image" class="text-button" @click="showGrid = !showGrid">{{ showGrid ? '顯示機台擷取' : '顯示校正格線' }}</button><span class="muted small" v-if="imageTime">{{ imageTime }} 擷取</span></div>
+            <div class="preview-toolbar"><button class="quiet compact" :disabled="capturing || demo" @click="capture">{{ capturing ? '擷取中…' : '更新機台畫面' }}</button><button v-if="image" class="text-button" @click="showGrid = !showGrid">{{ showGrid ? '顯示機台擷取' : '顯示校正格線' }}</button><span class="muted small" v-if="imageTime">{{ imageTime }} 單張擷取，需手動更新</span></div>
 
             <div class="position-controls">
               <div class="position-values"><span class="muted small">位移</span><output class="numeric">{{ position }}</output><label class="inline-field">步距<select v-model.number="step"><option :value="1">1 px</option><option :value="5">5 px</option><option :value="10">10 px</option></select></label></div>
@@ -183,8 +196,10 @@ onBeforeUnmount(() => {
             <label class="check"><input type="checkbox" :checked="resize.linear_filter" :disabled="controlsDisabled" @change="toggle('linear_filter', $event)">線性濾波</label>
             <label class="stacked-field duplicate-field">畫面複製<select :value="currentScene.duplicate" :disabled="controlsDisabled" @change="c.updateResize({ duplicate: Number(($event.target as HTMLSelectElement).value) })"><option :value="0">不複製</option><option :value="1">複製左側</option><option :value="2">複製右側</option></select></label>
             <div class="panel-actions"><button :disabled="controlsDisabled" @click="resetScene">重設此場景</button><button class="primary" :disabled="controlsDisabled || (!demo && !configuredPassword)" @click="c.saveResize()">{{ busy === 'save' ? '儲存中…' : '儲存到機台' }}</button></div>
+            <p class="muted small">調整會即時送到機台；儲存供下次啟動使用。機台擷取是靜態圖片，需點「更新機台畫面」。</p>
             <p class="muted small" v-if="!demo && !configuredPassword">儲存到機台需要設定 API 密碼。</p>
             <button class="text-button read-action" :disabled="controlsDisabled" @click="c.readResize()">重新讀取機台設定</button>
+            <p class="muted small">目前的影像縮放沿用 spice2x 的 Direct3D 9 繪圖路徑；不會改變 Windows 視窗大小。</p>
           </div>
         </div>
         <p v-else class="muted">正在讀取機台設定…</p>
@@ -193,6 +208,12 @@ onBeforeUnmount(() => {
       <section v-show="tab === 'operate'" aria-labelledby="operate-title">
         <div class="page-title"><div><p class="eyebrow">MACHINE CONTROLS</p><h1 id="operate-title">機台操作</h1></div></div>
         <div class="operation-grid"><button class="operation-button" :disabled="!connected || !!busy || !c.exactButton('Service')" @click="c.pulse('Service')"><span>SERVICE</span><small>點按一次，自動放開</small></button><button class="operation-button" :disabled="!connected || !!busy || !c.exactButton('Test')" @click="c.pulse('Test')"><span>TEST</span><small>點按一次，自動放開</small></button><button class="operation-button" :disabled="!connected || !!busy" @click="c.insertCoin()"><span>投幣 ＋1</span><small>加入機台投幣佇列</small></button><button class="operation-button" :disabled="!connected || !!busy" @click="c.releaseButtons()"><span>解除按鍵覆寫</span><small>放開所有 API 按鍵</small></button></div>
+        <div class="settings-panel system-actions">
+          <h2>遊戲與電源</h2>
+          <p class="muted small">操作前會再次確認；執行後可能中斷連線。結束遊戲是否自動重開，取決於機台的啟動腳本。</p>
+          <div class="operation-grid"><button v-for="item in systemActions" :key="item.command" class="operation-button" :disabled="!connected || !!busy || (!demo && !configuredPassword)" @click="confirmSystem(item.command)"><span>{{ item.label }}</span><small>{{ item.detail }}</small></button></div>
+          <p v-if="!demo && !configuredPassword" class="muted small">系統操作需要設定 API 密碼。</p>
+        </div>
         <p class="muted small" v-if="coinQueue !== undefined">尚未處理的投幣：{{ coinQueue }}（與遊戲內餘額不同）</p>
         <p class="muted" v-if="!connected">連線後即可使用機台操作。</p>
         <p class="muted small" v-else-if="!c.exactButton('Service') || !c.exactButton('Test')">未提供的按鍵會停用；可用按鍵由機台 API 回報。</p>

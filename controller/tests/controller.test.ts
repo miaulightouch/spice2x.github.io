@@ -46,6 +46,55 @@ test('resize parser rejects incompatible state and accepts normal float precisio
   assert.throws(() => parseResize([{ ...valid, enabled: 'yes' }]));
 });
 
+test('saving disabled calibration preserves its values and explicitly reports that it is inactive', async () => {
+  const c = useController();
+  try {
+    await c.startDemo();
+    c.updateResize({ enabled: false, scale_x: .9, offset_x: 12 });
+    await c.saveResize();
+    assert.equal(c.error.value, '');
+    assert.equal(c.resize.value!.enabled, false);
+    assert.equal(c.currentScene.value.scale_x, .9);
+    assert.equal(c.currentScene.value.offset_x, 12);
+    assert.match(c.message.value, /縮放尚未啟用/);
+    c.updateResize({ enabled: true });
+    await c.saveResize();
+    assert.equal(c.resize.value!.enabled, true);
+    assert.equal(c.currentScene.value.scale_x, .9);
+    assert.match(c.message.value, /縮放已啟用/);
+    assert.equal(c.unsaved.value, false);
+  } finally { c.disconnect(); }
+});
+
+test('editing or selecting a scene enables a previously disabled transform', async () => {
+  const c = useController();
+  try {
+    await c.startDemo();
+    c.updateResize({ enabled: false }); await c.saveResize();
+    c.updateResize({ offset_y: 13 }); await c.saveResize();
+    assert.equal(c.resize.value!.enabled, true);
+    assert.equal(c.currentScene.value.offset_y, 13);
+    c.updateResize({ enabled: false }); await c.saveResize();
+    await c.selectScene(3);
+    assert.equal(c.resize.value!.enabled, true);
+    assert.equal(c.resize.value!.scene, 3);
+    assert.equal(c.unsaved.value, true);
+  } finally { c.disconnect(); }
+});
+
+test('system actions in demo never disconnect or claim a real machine action', async () => {
+  const c = useController();
+  try {
+    await c.startDemo();
+    for (const command of ['restart', 'exit', 'reboot', 'shutdown'] as const) {
+      await c.machineControl(command);
+      assert.equal(c.error.value, '');
+      assert.equal(c.connected.value, true);
+      assert.match(c.message.value, /示範.*未送到機台/);
+    }
+  } finally { c.disconnect(); }
+});
+
 test('card queries from a previous connection are discarded', async () => {
   const c = useController();
   await c.startDemo();
