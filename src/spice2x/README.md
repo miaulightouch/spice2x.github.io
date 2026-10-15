@@ -316,7 +316,7 @@ context; it supports scaling, offsets, filtering and left/right duplication. The
 the driver's maximum power-of-two texture size. Failures are logged under
 `graphics::opengl`. OpenGL screenshot/capture and overlay support are unchanged.
 Other rendering backends can store these settings without applying a transform.
-A successful save confirms persistence, not rendering.
+A successful save confirms an accepted file write, not rendering or retention through an Embedded write filter.
 
 - image_resize_enable(enable: bool)
   - enables or disables image resize state
@@ -344,11 +344,13 @@ A successful save confirms persistence, not rendering.
   - this scales and positions the game image; it does not change the monitor's
     output resolution or the OS window dimensions
 - image_resize_save()
-  - requires an API password and saves all four scenes, the enabled state, and
-    the linear filter setting to the existing screen resize config file
+  - requires an API password and saves all four scenes, the active scene, the
+    enabled state, and the linear filter setting to the existing screen resize config file
   - preserves the window settings already stored in that file
   - reports a save failure in `errors`; updates are otherwise only in memory
-  - as with the existing config, scene 1 is selected on the next game launch
+  - restores the saved active scene on the next game launch; legacy files without
+    a selected scene default to scene 1. See [persistence troubleshooting](../../docs/Fork-setup.md#settings-after-restarting)
+    for Embedded write filters and the existing `-resizecfgpath` override
 
 For example, enable scene 1 and adjust its position and independent scales:
 
