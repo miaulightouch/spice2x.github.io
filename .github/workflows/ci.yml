@@ -1,4 +1,4 @@
-name: Publish validated Resize API Release
+name: Publish validated XP OpenGL Release
 
 on:
   push:
@@ -14,14 +14,14 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_COMMIT: 36bc9a0fb751006cda4502b0eb5f1a66b69010d7
-      CI_HEAD_SHA: 0303828e8155acd88d6f4cab1584f555f1a7a2d0
-      CI_RUN_ID: '38770857262'
-      RELEASE_TAG: 26-10-16-resize-api.1
+      RELEASE_COMMIT: 74b1bb30043001625a4d0e6b524a2dc6fa4cfeff
+      CI_HEAD_SHA: 4bae4644008f3e928b86abafe632e9a813d4bc86
+      CI_RUN_ID: '38783435558'
+      RELEASE_TAG: 26-10-16-xp-opengl.1
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: 36bc9a0fb751006cda4502b0eb5f1a66b69010d7
+          ref: 74b1bb30043001625a4d0e6b524a2dc6fa4cfeff
           fetch-depth: 0
       - name: Verify successful CI and matching source tree
         run: |
@@ -31,7 +31,9 @@ jobs:
           test "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "$CI_HEAD_SHA^{tree}")"
       - name: Verify resize API behavior
         working-directory: src/spice2x
-        run: python3 api/tests/run_resize_tests.py
+        run: |
+          python3 api/tests/run_resize_tests.py
+          python3 api/tests/run_control_tests.py
       - name: Download validated CI binaries
         run: |
           artifact=$(gh api "repos/$GH_REPO/actions/runs/$CI_RUN_ID/artifacts" \
@@ -40,32 +42,58 @@ jobs:
           gh run download "$CI_RUN_ID" --name "$artifact" --dir "$RUNNER_TEMP/resize-ci"
           test -f "$RUNNER_TEMP/resize-ci/spice2x/spice.exe"
           test -f "$RUNNER_TEMP/resize-ci/spice2x/spice64.exe"
+          test -f "$RUNNER_TEMP/resize-ci/spice2x/extras/winxp/spice.exe"
+          test -f "$RUNNER_TEMP/resize-ci/spice2x/extras/winxp/spicecfg.exe"
       - name: Package standard and full distributions
         run: |
           cd "$RUNNER_TEMP/resize-ci/spice2x"
           zip -qrXT9 "$RUNNER_TEMP/spice2x-$RELEASE_TAG.zip" . -x 'extras/*'
           zip -qrXT9 "$RUNNER_TEMP/spice2x-$RELEASE_TAG-full.zip" .
+      - name: Package XP executables
+        run: |
+          mkdir "$RUNNER_TEMP/xp-package"
+          cp "$RUNNER_TEMP/resize-ci/spice2x/extras/winxp/spice.exe" "$RUNNER_TEMP/xp-package/"
+          cp "$RUNNER_TEMP/resize-ci/spice2x/extras/winxp/spicecfg.exe" "$RUNNER_TEMP/xp-package/"
+          cp LICENSE "$RUNNER_TEMP/xp-package/LICENSE.txt"
+          cat > "$RUNNER_TEMP/xp-package/README.txt" <<'README'
+          XP 32-bit executables for an existing spice2x installation.
+          Back up and replace the existing XP spice.exe and spicecfg.exe.
+          Preserve existing game files, modules and launch arguments.
+          Includes XP-compatible power-off and experimental legacy jubeat OpenGL
+          calibration. WGL behavior, legacy GPU drivers and actual XP shutdown
+          still require testing on the target machine.
+          README
+          cd "$RUNNER_TEMP/xp-package"
+          zip -qrXT9 "$RUNNER_TEMP/spice2x-$RELEASE_TAG-winxp.zip" .
       - name: Publish prerelease
         run: |
           cat > "$RUNNER_TEMP/resize-api-release-notes.md" <<'NOTES'
-          Adds live image calibration through SpiceAPI:
-          - `resize.image_resize_get`: read the current state and four scenes.
-          - `resize.image_resize_set`: adjust position and scaling without restarting.
-          - `resize.image_resize_save`: persist settings; requires an API password.
+          Fixes Windows XP shutdown and adds legacy OpenGL image calibration for jubeat.
 
-          Includes Python wrappers, validation, and synchronized updates.
-          See PR #1 and `src/spice2x/README.md` for API examples.
+          - Power-off uses XP-compatible flags instead of Windows 8 hybrid shutdown.
+          - Native shutdown/reboot errors include Windows error codes.
+          - Shutdown privilege handles are cleaned up and failures are checked.
+          - A jubeat-only OpenGL 1.1 transform applies scale, offsets, filtering
+            and duplication at buffer swap, preserving game rendering state
+            in a separate context. Existing native I/O and launch arguments are retained.
+          - The `-winxp.zip` contains the XP 32-bit spice.exe and spicecfg.exe.
+            Back up the existing executables before replacing them. The standard
+            ZIP contains the regular binaries; the full ZIP also includes XP extras.
 
-          These packages promote the successful PR CI binaries. Their source tree
-          matches the merged commit exactly. This prerelease still needs testing
-          on a Windows game host.
+          Validation: all existing CI builds, 145 production resize checks,
+          400 concurrent updates, inert native control/privilege regression tests,
+          and real Mesa EGL pixel tests for scaling, offsets and duplication.
+          WGL hooks, ATI legacy drivers and actual Windows XP power-off still
+          need target-machine testing. This is an experimental prerelease.
+          See PR #2. Main and the API PR have no workflow changes.
           NOTES
           printf '\nCI: https://github.com/%s/actions/runs/%s\n' "$GH_REPO" "$CI_RUN_ID" \
             >> "$RUNNER_TEMP/resize-api-release-notes.md"
           gh release create "$RELEASE_TAG" \
             "$RUNNER_TEMP/spice2x-$RELEASE_TAG.zip" \
             "$RUNNER_TEMP/spice2x-$RELEASE_TAG-full.zip" \
+            "$RUNNER_TEMP/spice2x-$RELEASE_TAG-winxp.zip" \
             --target "$RELEASE_COMMIT" \
-            --title "spice2x Resize API 2026-10-16" \
+            --title "spice2x XP power control and OpenGL calibration 2026-10-16" \
             --notes-file "$RUNNER_TEMP/resize-api-release-notes.md" \
             --prerelease
