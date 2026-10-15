@@ -773,6 +773,14 @@ set(SOURCE_FILES ${SOURCE_FILES}
         util/socd_cleaner.cpp
 )
 
+# Legacy WGL hooks are currently validated only for the XP build path.
+# Non-XP targets must not compile or initialize this experimental backend.
+if(SPICE_XP)
+    list(APPEND SOURCE_FILES
+            hooks/graphics/backends/opengl/opengl_backend.cpp
+            hooks/graphics/backends/opengl/opengl_resize.cpp)
+endif()
+
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} PREFIX "Source Files" FILES ${SOURCE_FILES})
 
 # guard against statically importing DLLs that must always be loaded dynamically:

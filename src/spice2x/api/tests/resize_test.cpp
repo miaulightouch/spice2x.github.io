@@ -164,6 +164,7 @@ int main() {
     CHECK(std::string(saved_game["custom"].GetString()) == "keep");
     CHECK(saved["sp2x_games"]["Other Game"]["w_width"].GetInt() == 777);
     CHECK(saved_game["scenes"].Size() == 4);
+    CHECK(saved_game["screen_resize_current_scene"].GetInt() == 3);
     CHECK(saved_game["scenes"][2]["offset_x"].GetInt() == 10);
     resize_test_write_failure = true;
     CHECK(call(module, "image_resize_save")["errors"].Size() == 1);
@@ -172,10 +173,38 @@ int main() {
     cfg::SCREENRESIZE = std::make_unique<cfg::ScreenResize>();
     CHECK(cfg::SCREENRESIZE->enable_screen_resize);
     CHECK(!cfg::SCREENRESIZE->enable_linear_filter);
-    CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 0);
+    CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 3);
     CHECK(cfg::SCREENRESIZE->scene_settings[2].offset_x == 10);
     CHECK(cfg::SCREENRESIZE->client_width == 1600);
     CHECK(near(cfg::SCREENRESIZE->scene_settings[1].scale_x, 2.5));
+
+    // Disabled resize still remembers the selected scene and its parameters.
+    call(module, "image_resize_set", R"([{"scene":2,"enabled":false}])");
+    CHECK(call(module, "image_resize_save")["errors"].Empty());
+    cfg::SCREENRESIZE = std::make_unique<cfg::ScreenResize>();
+    CHECK(!cfg::SCREENRESIZE->enable_screen_resize);
+    CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 1);
+    CHECK(near(cfg::SCREENRESIZE->scene_settings[1].scale_x, 2.5));
+
+    // Legacy and malformed configs must never produce an invalid renderer index.
+    for (const auto *value : {"-1", "4", "256", "4294967296", "1.5", "true", "\"3\"", "null"}) {
+        std::ofstream("resize-test.json") <<
+            R"({"sp2x_games":{"Resize API Test":{"screen_resize_current_scene":)" << value << "}}}";
+        cfg::SCREENRESIZE = std::make_unique<cfg::ScreenResize>();
+        CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 0);
+    }
+    std::ofstream("resize-test.json") << R"({"sp2x_games":{"Resize API Test":{}}})";
+    cfg::SCREENRESIZE = std::make_unique<cfg::ScreenResize>();
+    CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 0);
+
+    // Keep the legacy global fallback, with per-game settings taking precedence.
+    std::ofstream("resize-test.json") << R"({"screen_resize_current_scene":2})";
+    cfg::SCREENRESIZE = std::make_unique<cfg::ScreenResize>();
+    CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 2);
+    std::ofstream("resize-test.json") << R"({"screen_resize_current_scene":2,
+        "sp2x_games":{"Resize API Test":{"screen_resize_current_scene":1}}})";
+    cfg::SCREENRESIZE = std::make_unique<cfg::ScreenResize>();
+    CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 1);
 
     // Concurrent API clients and the renderer's lock must observe complete updates.
     std::atomic<bool> failed = false;
