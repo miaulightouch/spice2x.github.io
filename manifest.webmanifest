@@ -1,0 +1,12 @@
+{
+  "id": "./",
+  "name": "Arcade Room 機台控制器",
+  "short_name": "Arcade Room",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f1f4f5",
+  "theme_color": "#096a62",
+  "icons": [{ "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
