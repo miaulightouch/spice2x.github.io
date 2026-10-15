@@ -23,6 +23,8 @@ jobs:
         run: |
           calculatedSha=$(git rev-parse --short ${{ github.sha }})
           echo "COMMIT_SHORT_SHA=$calculatedSha" >> $GITHUB_ENV
+      - name: Test image resize API
+        run: python3 api/tests/run_resize_tests.py
       - name: Compile
         run: ./build_docker.sh
       - uses: actions/upload-artifact@v6
