@@ -1,3 +1,4 @@
+import { LocalizedError } from '../i18n';
 import { isRecord } from './client';
 
 export interface ResizeScene {
@@ -22,7 +23,7 @@ export function parseResize(data: unknown[]): ResizeState {
   if (!isRecord(v) || typeof v.enabled !== 'boolean' || typeof v.linear_filter !== 'boolean' ||
       !Number.isInteger(v.scene) || Number(v.scene) < 1 || Number(v.scene) > 4 ||
       !Array.isArray(v.scenes) || v.scenes.length !== 4 || !v.scenes.every(isScene)) {
-    throw new Error('畫面校正回應格式不符，請使用支援 Resize API 的 spice2x 版本。');
+    throw new LocalizedError('error.resizeFormat');
   }
   return structuredClone(v) as unknown as ResizeState;
 }

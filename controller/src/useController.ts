@@ -1,16 +1,18 @@
+import { locale, msg, textRef, errorText, LocalizedError } from './i18n';
 import { computed, ref, shallowRef, toRaw } from 'vue';
 import { ApiError, SpiceClient, asError, isRecord } from './api/client';
 import type { ConnectionStatus, Rpc } from './api/client';
 import { DemoApi } from './api/demo';
 import { ResizeQueue, defaultScene, parseResize } from './api/resize';
 import type { ResizePatch, ResizeState } from './api/resize';
+import type { TextValue } from './i18n';
 import type { Profile } from './storage';
 
 export function useController() {
   const status = ref<ConnectionStatus>('disconnected');
   const demo = ref(false);
-  const message = ref('請在連線設定填入機台位址，或先試用示範模式。');
-  const error = ref('');
+  const message = textRef(msg('msg.initial'));
+  const error = textRef();
   const busy = ref('');
   const latency = ref(0);
   const game = ref('');
@@ -18,7 +20,7 @@ export function useController() {
   const buttons = ref<string[]>([]);
   const coinQueue = ref<number>();
   const resize = ref<ResizeState>();
-  const resizeError = ref('');
+  const resizeError = textRef();
   const applying = ref(false);
   const unsaved = ref(false);
   const image = ref('');
@@ -36,8 +38,8 @@ export function useController() {
   let confirmed: ResizeState | undefined;
   let resizeApplyError: Error | undefined;
 
-  function notify(text: string): void { message.value = text; error.value = ''; }
-  function report(value: unknown): void { error.value = asError(value).message; }
+  function notify(text: TextValue): void { message.value = text; error.value = ''; }
+  function report(value: unknown): void { error.value = errorText(value); }
   function disconnect(): void {
     ++generation;
     queue?.cancel(); queue = undefined;
@@ -70,7 +72,7 @@ export function useController() {
       if (epoch !== generation) return;
       api.value = next;
       await load(epoch);
-      if (epoch === generation && next.status === 'connected') notify(`已連線至 ${profile.name}`);
+      if (epoch === generation && next.status === 'connected') notify(msg('msg.connected', { name: profile.name }));
     } catch (value) { if (epoch === generation) report(value); }
   }
 
@@ -78,7 +80,7 @@ export function useController() {
     disconnect();
     demo.value = true; api.value = new DemoApi();
     await load(generation);
-    notify('示範模式 · 所有操作只在此頁面模擬，不會送到機台。');
+    notify(msg('msg.demo'));
   }
 
   async function load(epoch: number): Promise<void> {
@@ -98,9 +100,9 @@ export function useController() {
       try {
         resize.value = parseResize(r.value); confirmed = structuredClone(toRaw(resize.value));
         installQueue(rpc, epoch);
-      } catch (value) { resizeError.value = asError(value).message; }
+      } catch (value) { resizeError.value = errorText(value); }
     } else if (r?.status === 'rejected') {
-      resizeError.value = `畫面校正無法使用：${asError(r.reason).message}`;
+      resizeError.value = msg('error.resizeUnavailable', { detail: errorText(r.reason) });
     }
     if (client) latency.value = client.latency;
   }
@@ -155,7 +157,7 @@ export function useController() {
       await queue?.flush();
       const state = parseResize(await api.value!.request('resize', 'image_resize_set', [{ scene, enabled: true }]));
       resize.value = state; confirmed = structuredClone(state); unsaved.value = true; resizeApplyError = undefined;
-      notify(`已啟用並切換場景 ${scene}`);
+      notify(msg('msg.sceneSelected', { n: scene }));
     });
   }
   async function readResize(): Promise<void> {
@@ -165,34 +167,34 @@ export function useController() {
       const state = parseResize(await rpc.request('resize', 'image_resize_get'));
       resize.value = state; confirmed = structuredClone(state); resizeError.value = ''; resizeApplyError = undefined;
       if (!queue) installQueue(rpc, generation);
-      notify('已讀取機台目前的畫面設定');
+      notify(msg('msg.resizeRead'));
     });
   }
   async function saveResize(): Promise<void> {
     await action('save', async () => {
-      if (!demo.value && !configuredPassword.value) throw new Error('寫入設定檔需要在 spice2x 啟用 API 密碼，並使用相同密碼連線。');
+      if (!demo.value && !configuredPassword.value) throw new LocalizedError('error.savePassword');
       await queue?.flush();
-      if (resizeApplyError) throw new Error(`校正未成功套用，請重新調整後再儲存：${resizeApplyError.message}`);
+      if (resizeApplyError) throw new LocalizedError('error.apply', { detail: errorText(resizeApplyError) });
       const expected = confirmed;
       await api.value!.request('resize', 'image_resize_save');
       const state = parseResize(await api.value!.request('resize', 'image_resize_get'));
-      if (JSON.stringify(state) !== JSON.stringify(expected)) throw new Error('儲存後讀回的設定不同，請重新讀取並確認機台設定。');
+      if (JSON.stringify(state) !== JSON.stringify(expected)) throw new LocalizedError('error.saveMismatch');
       unsaved.value = false;
       resize.value = state; confirmed = structuredClone(state);
-      const saved = demo.value ? '示範設定已儲存，未寫入機台。' : '已將四組場景寫入機台設定檔。';
-      notify(saved + (state.enabled
-        ? `縮放已啟用，目前為場景 ${state.scene}。`
-        : '縮放尚未啟用，設定不會影響畫面；請勾選「啟用縮放」。'));
+      notify(msg('msg.savedStatus', {
+        summary: msg(demo.value ? 'msg.demoSaved' : 'msg.resizeSaved'),
+        state: state.enabled ? msg('msg.resizeEnabled', { n: state.scene }) : msg('msg.resizeDisabled'),
+      }));
     });
   }
 
   async function machineControl(command: 'restart' | 'exit' | 'reboot' | 'shutdown'): Promise<void> {
     await action(command, async () => {
-      if (!demo.value && !configuredPassword.value) throw new Error('系統操作需要使用 API 密碼連線。');
+      if (!demo.value && !configuredPassword.value) throw new LocalizedError('error.controlPassword');
       const epoch = generation;
       const rpc = api.value!;
       const simulated = demo.value;
-      const label = { restart: '重新啟動遊戲', exit: '結束遊戲', reboot: '重新啟動機台', shutdown: '關閉機台' }[command];
+      const label = msg(({ restart: 'action.restart', exit: 'action.exit', reboot: 'action.reboot', shutdown: 'action.shutdown' } as const)[command]);
       await queue?.flush();
       if (epoch !== generation) return;
       try {
@@ -202,19 +204,19 @@ export function useController() {
         if (value instanceof ApiError) throw value;
         // Process termination can close the API before a response. Never retry.
         disconnect();
-        message.value = `${label}要求後連線中斷；無法確認執行結果，請查看機台。未自動重送。`;
+        message.value = msg('msg.actionUnknown', { action: label });
         error.value = '';
         return;
       }
       if (epoch !== generation) return;
       if (!simulated) disconnect();
-      notify(simulated ? `示範：${label}，未送到機台。` : `機台已回應${label}要求；請查看機台，啟動完成後重新連線。`);
+      notify(msg(simulated ? 'msg.actionDemo' : 'msg.actionAccepted', { action: label }));
     });
   }
 
   async function action(key: string, fn: () => Promise<void>): Promise<void> {
     if (busy.value) return;
-    if (!connected.value || !api.value) { report(new Error('請先連線至機台。')); return; }
+    if (!connected.value || !api.value) { report(new LocalizedError('error.connectFirst')); return; }
     const epoch = generation;
     busy.value = key; error.value = '';
     try { await fn(); }
@@ -225,41 +227,41 @@ export function useController() {
   async function pulse(label: string): Promise<void> {
     await action(label, async () => {
       const name = exactButton(label);
-      if (!name) throw new Error(`機台沒有提供 ${label} 按鍵。`);
+      if (!name) throw new LocalizedError('error.button', { label });
       const rpc = api.value!;
       await rpc.request('buttons', 'write', [[name, true]]);
       try { await new Promise(resolve => setTimeout(resolve, 180)); }
       finally { await rpc.request('buttons', 'write_reset', [[name]]); }
-      notify(`${label.toUpperCase()} 已按下並放開`);
+      notify(msg('msg.pulsed', { label: label.toUpperCase() }));
     });
   }
   async function releaseButtons(): Promise<void> {
-    await action('release', async () => { await api.value!.request('buttons', 'write_reset'); notify('已解除所有按鍵覆寫'); });
+    await action('release', async () => { await api.value!.request('buttons', 'write_reset'); notify(msg('msg.buttonsReleased')); });
   }
   async function insertCoin(): Promise<void> {
     await action('coin', async () => {
       await api.value!.request('coin', 'insert', [1]);
-      notify('已送出 1 枚投幣');
+      notify(msg('msg.coin'));
       try { const data = await api.value!.request('coin', 'get'); if (typeof data[0] === 'number') coinQueue.value = data[0]; } catch { /* Insertion already succeeded; never replay it. */ }
     });
   }
   async function insertCard(unit: number, number: string): Promise<void> {
-    await action('card', async () => { await api.value!.request('card', 'insert', [unit, number]); notify(`已送出卡片至 P${unit + 1}`); });
+    await action('card', async () => { await api.value!.request('card', 'insert', [unit, number]); notify(msg('msg.cardInserted', { n: unit + 1 })); });
   }
   async function getMachineCards(): Promise<unknown[]> {
-    if (!connected.value || !api.value) throw new Error('請先連線至機台。');
+    if (!connected.value || !api.value) throw new LocalizedError('error.connectFirst');
     const epoch = generation;
     const data = await api.value.request('card', 'get_cards');
-    if (epoch !== generation) throw new Error('連線已變更，請重新讀取卡片。');
+    if (epoch !== generation) throw new LocalizedError('error.cardsChanged');
     return data;
   }
   async function keypad(unit: number, text: string): Promise<void> {
-    await action('keypad', async () => { await api.value!.request('keypads', 'write', [unit, text]); notify('已送出數字鍵'); });
+    await action('keypad', async () => { await api.value!.request('keypads', 'write', [unit, text]); notify(msg('msg.keypad')); });
   }
 
   async function capture(): Promise<void> {
     if (!connected.value || capturing.value) return;
-    if (demo.value) { notify('示範模式僅顯示校正格線。'); return; }
+    if (demo.value) { notify(msg('msg.gridOnly')); return; }
     if (!activeProfile) return;
     const epoch = generation;
     capturing.value = true; error.value = '';
@@ -268,15 +270,15 @@ export function useController() {
       await next.connect(activeProfile.endpoint, activeProfile.password);
       const screens = await next.request('capture', 'get_screens');
       const screen = screens.find(v => Number.isInteger(v) && Number(v) >= 0);
-      if (screen === undefined) throw new Error('機台目前沒有可擷取的畫面。');
+      if (screen === undefined) throw new LocalizedError('error.noCapture');
       const data = await next.request('capture', 'get_jpg', [screen, 65, 2]);
-      if (typeof data[3] !== 'string' || !/^[A-Za-z0-9+/=\r\n]+$/.test(data[3])) throw new Error('機台未提供有效 JPEG；這個版本可能沒有畫面擷取功能。');
+      if (typeof data[3] !== 'string' || !/^[A-Za-z0-9+/=\r\n]+$/.test(data[3])) throw new LocalizedError('error.jpeg');
       if (epoch === generation) {
         image.value = 'data:image/jpeg;base64,' + data[3];
-        imageTime.value = new Date().toLocaleTimeString('zh-TW', { hour12: false });
-        notify('畫面已更新；畫面擷取使用獨立連線。');
+        imageTime.value = new Date().toLocaleTimeString(locale.value, { hour12: false });
+        notify(msg('msg.captureUpdated'));
       }
-    } catch (value) { if (epoch === generation) report(value instanceof ApiError ? new Error(`畫面擷取不可用：${value.message}`) : value); }
+    } catch (value) { if (epoch === generation) report(value instanceof ApiError ? new LocalizedError('error.capture', { detail: value.message }) : value); }
     finally { next.disconnect(); if (captureClient === next) captureClient = undefined; capturing.value = false; }
   }
 

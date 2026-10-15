@@ -1,3 +1,4 @@
+import { LocalizedError } from './i18n';
 import { isRecord } from './api/client';
 
 export interface Profile { id: string; name: string; endpoint: string; password: string; rememberPassword: boolean }
@@ -27,7 +28,7 @@ export function saveProfiles(profiles: Profile[], storage: Pick<Storage, 'setIte
 }
 export function normalizeCard(value: string): string {
   const card = value.replace(/\s+/g, '').toUpperCase();
-  if (!/^[0-9A-F]{16}$/.test(card)) throw new Error('卡號需要 16 碼十六進位字元（0–9、A–F）。');
+  if (!/^[0-9A-F]{16}$/.test(card)) throw new LocalizedError('error.card');
   return card;
 }
 export function loadCards(): SavedCard[] {

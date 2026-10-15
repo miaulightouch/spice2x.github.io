@@ -1,6 +1,14 @@
-import { createApp } from 'vue';
+import { createApp, watchEffect } from 'vue';
 import App from './App.vue';
+import { initializeI18n, locale, t } from './i18n';
 import './style.css';
+
+initializeI18n(navigator.languages?.length ? navigator.languages : [navigator.language]);
+watchEffect(() => {
+  document.documentElement.lang = locale.value;
+  document.title = t('app.title');
+  document.querySelector('meta[name=description]')?.setAttribute('content', t('app.description'));
+});
 
 createApp(App).mount('#app');
 

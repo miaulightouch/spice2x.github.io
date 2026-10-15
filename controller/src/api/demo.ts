@@ -1,3 +1,4 @@
+import { t, LocalizedError } from '../i18n';
 import type { Rpc } from './client';
 import { defaultScene } from './resize';
 import type { ResizeState, ResizePatch } from './resize';
@@ -36,9 +37,9 @@ export class DemoApi implements Rpc {
       if (fn === 'insert') this.coinQueue += Number(params[0] ?? 1);
       return fn === 'get' ? [this.coinQueue] : [];
     }
-    if (module === 'info') return [fn === 'avs' ? { model: 'DEMO', dest: 'J', spec: 'A' } : { version: '示範模式' }];
+    if (module === 'info') return [fn === 'avs' ? { model: 'DEMO', dest: 'J', spec: 'A' } : { version: t('status.demo') }];
     if (module === 'card' && fn === 'get_cards') return [];
-    if (module === 'capture') throw new Error('示範模式不會連線擷取畫面。');
+    if (module === 'capture') throw new LocalizedError('error.demoCapture');
     return [];
   }
 }
