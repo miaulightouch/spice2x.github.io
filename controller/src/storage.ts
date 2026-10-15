@@ -9,9 +9,10 @@ const defaults = (): Profile[] => [
   { id: 'jubeat-b', name: 'jubeat B', endpoint: '', password: '', rememberPassword: false },
 ];
 
-export function loadProfiles(storage: Pick<Storage, 'getItem'> = localStorage): Profile[] {
+export function loadProfiles(storage?: Pick<Storage, 'getItem'>): Profile[] {
   try {
-    const raw: unknown = JSON.parse(storage.getItem(PROFILE_KEY) ?? 'null');
+    const target = storage ?? localStorage;
+    const raw: unknown = JSON.parse(target.getItem(PROFILE_KEY) ?? 'null');
     if (Array.isArray(raw)) {
       const profiles = raw.filter(isRecord).filter(v => typeof v.id === 'string' && typeof v.name === 'string' && typeof v.endpoint === 'string')
         .slice(0, 30).map(v => ({ id: String(v.id), name: String(v.name), endpoint: String(v.endpoint),

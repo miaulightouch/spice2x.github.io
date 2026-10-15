@@ -202,7 +202,10 @@ export function useController() {
   }
   async function getMachineCards(): Promise<unknown[]> {
     if (!connected.value || !api.value) throw new Error('請先連線至機台。');
-    return api.value.request('card', 'get_cards');
+    const epoch = generation;
+    const data = await api.value.request('card', 'get_cards');
+    if (epoch !== generation) throw new Error('連線已變更，請重新讀取卡片。');
+    return data;
   }
   async function keypad(unit: number, text: string): Promise<void> {
     await action('keypad', async () => { await api.value!.request('keypads', 'write', [unit, text]); notify('已送出數字鍵'); });

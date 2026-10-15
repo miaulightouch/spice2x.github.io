@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'inherit' });
-execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], { cwd: root, stdio: 'inherit' });
+const npmCli = process.env.npm_execpath;
+if (!npmCli) throw new Error('Run this script with npm run deploy:pages.');
+execFileSync(process.execPath, [npmCli, 'run', 'build'], { cwd: root, stdio: 'inherit' });
 const dist = resolve(root, 'dist');
 if (!existsSync(join(dist, 'index.html'))) throw new Error('Missing built index.html');
 git('fetch', 'origin', 'refs/heads/gh-pages');

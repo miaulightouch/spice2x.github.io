@@ -46,6 +46,14 @@ test('resize parser rejects incompatible state and accepts normal float precisio
   assert.throws(() => parseResize([{ ...valid, enabled: 'yes' }]));
 });
 
+test('card queries from a previous connection are discarded', async () => {
+  const c = useController();
+  await c.startDemo();
+  const pending = c.getMachineCards();
+  c.disconnect();
+  await assert.rejects(pending, /連線已變更/);
+});
+
 test('passwords are persisted only with an explicit remember choice', () => {
   let saved = '';
   const profiles = loadProfiles({ getItem: () => null });
@@ -55,6 +63,7 @@ test('passwords are persisted only with an explicit remember choice', () => {
   const restored = loadProfiles({ getItem: () => saved });
   assert.equal(restored[0]!.password, ''); assert.equal(restored[1]!.password, 'remembered');
   assert.equal(loadProfiles({ getItem: () => '{broken' }).length, 2);
+  assert.equal(loadProfiles({ getItem: () => { throw new Error('storage blocked'); } }).length, 2);
 });
 
 test('card IDs are normalized and malformed values cannot be inserted', () => {
