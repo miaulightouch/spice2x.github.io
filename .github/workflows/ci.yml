@@ -1,4 +1,4 @@
-name: Publish validated calibration persistence release
+name: Publish validated fork release
 
 on:
   push:
@@ -14,14 +14,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_COMMIT: a27620a6b7d3c680723980e58e9dc05c625d6d58
-      CI_HEAD_SHA: b5382687f1d0b7c4a841e9912b68789f7a26b8ef
-      CI_RUN_ID: '38792598917'
-      RELEASE_TAG: 26-10-16-xp-opengl.3
+      RELEASE_COMMIT: d9ff6619e68a73150c82ef786ded4a8122ed38af
+      CI_HEAD_SHA: 1c7eee6d4409674a2e57cdb60cf06e400ac69cfa
+      CI_RUN_ID: '38805031986'
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: a27620a6b7d3c680723980e58e9dc05c625d6d58
+          ref: d9ff6619e68a73150c82ef786ded4a8122ed38af
           fetch-depth: 0
       - name: Verify successful CI and matching source tree
         run: |
@@ -29,16 +28,24 @@ jobs:
           test "$(gh run view "$CI_RUN_ID" --json headSha --jq .headSha)" = "$CI_HEAD_SHA"
           git fetch origin "$CI_HEAD_SHA"
           test "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "$CI_HEAD_SHA^{tree}")"
+      - name: Resolve fork version
+        run: |
+          tag=$(python3 scripts/fork_version.py)
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
       - name: Verify resize API behavior
         working-directory: src/spice2x
         run: |
           python3 api/tests/run_resize_tests.py
           python3 api/tests/run_control_tests.py
+          python3 api/tests/run_config_path_tests.py
       - name: Download validated CI binaries
         run: |
           artifact=$(gh api "repos/$GH_REPO/actions/runs/$CI_RUN_ID/artifacts" \
             --jq '.artifacts[] | select(.expired == false) | .name')
           test -n "$artifact"
+          [[ "$artifact" =~ ^spice2x-ci-[0-9a-f]{7,40}$ ]]
+          artifact_tree=$(gh api "repos/$GH_REPO/commits/${artifact#spice2x-ci-}" --jq '.commit.tree.sha')
+          test "$(git rev-parse 'HEAD^{tree}')" = "$artifact_tree"
           gh run download "$CI_RUN_ID" --name "$artifact" --dir "$RUNNER_TEMP/resize-ci"
           test -f "$RUNNER_TEMP/resize-ci/spice2x/spice.exe"
           test -f "$RUNNER_TEMP/resize-ci/spice2x/spice64.exe"
@@ -46,6 +53,7 @@ jobs:
           test -f "$RUNNER_TEMP/resize-ci/spice2x/extras/winxp/spicecfg.exe"
       - name: Package standard and full distributions
         run: |
+          cp FORK_VERSION "$RUNNER_TEMP/resize-ci/spice2x/FORK_VERSION"
           cd "$RUNNER_TEMP/resize-ci/spice2x"
           zip -qrXT9 "$RUNNER_TEMP/spice2x-$RELEASE_TAG.zip" . -x 'extras/*'
           zip -qrXT9 "$RUNNER_TEMP/spice2x-$RELEASE_TAG-full.zip" .
@@ -55,10 +63,14 @@ jobs:
           cp "$RUNNER_TEMP/resize-ci/spice2x/extras/winxp/spice.exe" "$RUNNER_TEMP/xp-package/"
           cp "$RUNNER_TEMP/resize-ci/spice2x/extras/winxp/spicecfg.exe" "$RUNNER_TEMP/xp-package/"
           cp LICENSE "$RUNNER_TEMP/xp-package/LICENSE.txt"
+          cp FORK_VERSION "$RUNNER_TEMP/xp-package/FORK_VERSION"
           cat > "$RUNNER_TEMP/xp-package/README.txt" <<'README'
           XP 32-bit executables for an existing spice2x installation.
           Back up and replace the existing XP spice.exe and spicecfg.exe.
           Preserve existing game files, modules and launch arguments.
+          Use -configdir "%APPDATA%\spice" for a shared settings directory,
+          or -portable to read/write beside the EXE. Per-file paths take priority.
+          Copy existing settings to the chosen root before switching.
           Remembers the saved calibration scene across game restarts.
           Use -resizecfgpath for a path verified to survive Embedded write filters.
           Includes XP-compatible power-off and experimental legacy jubeat OpenGL
@@ -70,31 +82,30 @@ jobs:
       - name: Publish prerelease
         run: |
           cat > "$RUNNER_TEMP/resize-api-release-notes.md" <<'NOTES'
-          Calibration now restores the selected scene after restarting the game.
+          - Add -configdir "%APPDATA%\spice" (or any chosen directory) for main XML and helper settings.
+          - Add -portable to read/write beside the running EXE, independent of the working directory.
+            Copy existing settings into the chosen root before switching. Per-file overrides take priority
+            and support environment variables; existing defaults are unchanged without these options.
+          - Reduce XP OpenGL overhead: bypass identity transforms and cache immutable capabilities
+            and unchanged texture parameters. Active scaling retains synchronization and state isolation;
+            no zero-latency or measured-millisecond claim is made.
+          - Use <upstream version>-<build number> for the release, tag and archive version.
+            FORK_VERSION is included in all archives. Historical tags remain available.
 
-          - Saves and reloads the active scene along with all four scene settings, enabled state, and filtering.
-          - Legacy files without an active scene still default to Scene 1. Invalid indices fall back safely.
-          - After upgrading, select the desired scene and save once.
-          - Embedded XP EWF/FBWF can still discard accepted file writes after a full reboot.
-            Use the existing -resizecfgpath override with a location verified to survive reboot;
-            see docs/Fork-setup.md for diagnosis. This release does not change write-filter settings.
-          - README and usage notes document only this fork's additions, following Proton-BM's style.
-          - The hosted Web controller has a more compact layout and English, Traditional Chinese,
-            Simplified Chinese, Japanese, and Korean interfaces. Web assets update separately.
+          Setup and latency notes: https://github.com/miaulightouch/spice2x.github.io/blob/main/docs/Fork-setup.md
 
-          Scene persistence is shared config behavior across Windows builds. XP-specific WGL hooks
-          and power-off flags remain guarded by SPICE_XP; non-XP shutdown policy is unchanged.
+          Upstream version: 26-10-03. Source snapshot: upstream main c83496776e4dfa06f286e483d21fd269c331505c
+          (2026-10-12), six commits after that release. Fork changes are applied on top.
 
-          The -winxp.zip contains XP 32-bit spice.exe and spicecfg.exe for an existing installation.
-          Back up and replace those executables, preserving game data and launch arguments.
-          The standard archive contains regular binaries; the full archive includes XP extras.
+          The -winxp.zip contains XP 32-bit spice.exe and spicecfg.exe for an existing installation;
+          preserve game files, modules and launch arguments. The standard ZIP contains regular binaries,
+          and the full ZIP includes XP extras. Game/NVRAM/log paths are not redirected.
 
-          Validation: existing GNU/XP and MSVC CI builds, 161 production resize/config checks,
-          400 concurrent updates, and the native control/privilege checks for SPICE_XP=0 and 1.
-          Web: 33 tests, Vue/TypeScript checks, production build, and live five-language demo checks.
-          The user verified the previous XP OpenGL transform on the target cabinet; this new scene
-          persistence fix still needs a target-machine restart check. No Windows runtime test is claimed.
-          See PR #4. Main and the source PR have no workflow changes.
+          Validation: existing GNU/XP and MSVC CI builds; 161 resize/config checks + 400 concurrent updates;
+          config-path helpers with real file round trips and inert Win32 boundaries; native power-control
+          tests for SPICE_XP=0 and 1; local Mesa EGL pixel checks; release-version validation.
+          Target-machine WGL/ATI behavior and input-to-display latency still require measurement.
+          See PR #5. Main and the source PR have no GitHub Actions changes.
 
           NOTES
           printf '\nCI: https://github.com/%s/actions/runs/%s\n' "$GH_REPO" "$CI_RUN_ID" \
@@ -104,6 +115,6 @@ jobs:
             "$RUNNER_TEMP/spice2x-$RELEASE_TAG-full.zip" \
             "$RUNNER_TEMP/spice2x-$RELEASE_TAG-winxp.zip" \
             --target "$RELEASE_COMMIT" \
-            --title "spice2x calibration persistence (revision 3)" \
+            --title "$RELEASE_TAG" \
             --notes-file "$RUNNER_TEMP/resize-api-release-notes.md" \
             --prerelease
