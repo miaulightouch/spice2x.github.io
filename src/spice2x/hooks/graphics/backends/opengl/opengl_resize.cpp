@@ -15,10 +15,10 @@ namespace graphics::opengl {
                 !std::isfinite(scene.scale_y) || scene.scale_x < .6f || scene.scale_x > 2.5f ||
                 scene.scale_y < .6f || scene.scale_y > 2.5f) return false;
 
-        GLint maximum = 0;
-        gl.glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximum);
-        const int tw = texture_extent(width, maximum);
-        const int th = texture_extent(height, maximum);
+        // Immutable for this private context; do not query the driver every frame.
+        if (!maximum_texture_size) gl.glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximum_texture_size);
+        const int tw = texture_extent(width, maximum_texture_size);
+        const int th = texture_extent(height, maximum_texture_size);
         if (!tw || !th) return false;
 
         // This is our context's error state, never the game's.
@@ -32,10 +32,13 @@ namespace graphics::opengl {
             texture_height = th;
         }
         const auto filter = linear_filter ? GL_LINEAR : GL_NEAREST;
-        gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-        gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
-        gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-        gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+        if (texture_filter != filter) {
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+            texture_filter = filter;
+        }
         gl.glReadBuffer(buffer);
         gl.glDrawBuffer(buffer);
         gl.glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);

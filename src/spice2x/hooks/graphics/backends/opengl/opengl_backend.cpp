@@ -23,6 +23,7 @@ namespace {
     struct Context {
         HGLRC resize_context = nullptr;
         graphics::opengl::ImageResize image;
+        GLenum buffer = 0;
         bool warned = false;
         bool logged = false;
     };
@@ -47,6 +48,8 @@ namespace {
             scene = cfg::SCREENRESIZE->scene_settings[cfg::SCREENRESIZE->screen_resize_current_scene];
             linear_filter = cfg::SCREENRESIZE->enable_linear_filter;
         }
+        // No extra copy, context switch or GPU synchronization for an identity scene.
+        if (!graphics::opengl::requires_resize(scene)) return;
         RECT rect {};
         const HWND window = WindowFromDC(dc);
         if (!window || !GetClientRect(window, &rect)) return;
@@ -69,10 +72,12 @@ namespace {
         const bool switched = make_current(dc, state.resize_context);
         bool drawn = false;
         if (switched) {
-            GLint double_buffer = GL_FALSE;
-            gl.glGetIntegerv(GL_DOUBLEBUFFER, &double_buffer);
-            drawn = state.image.draw(gl, width, height, scene, linear_filter,
-                    double_buffer ? GL_BACK : GL_FRONT);
+            if (!state.buffer) {
+                GLint double_buffer = GL_FALSE;
+                gl.glGetIntegerv(GL_DOUBLEBUFFER, &double_buffer);
+                state.buffer = double_buffer ? GL_BACK : GL_FRONT;
+            }
+            drawn = state.image.draw(gl, width, height, scene, linear_filter, state.buffer);
         }
         // wglMakeCurrent failure unbinds the old context, so restore it on BOTH paths.
         const bool restored = make_current(game_dc, game_context);
