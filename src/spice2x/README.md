@@ -313,6 +313,60 @@ which also means that your hex edits are applicable directly.
   - enables or disables image resize state
 - image_resize_set_scene(scene: int)
   - sets the active scene for image resize state; set to 0 to disable resize
+- image_resize_get()
+  - returns one object with `enabled`, `scene` (1-4), `linear_filter`, and `scenes`
+  - `scenes` contains the settings for all four scenes, in scene-number order
+- image_resize_set(settings: object)
+  - applies a partial update immediately, without restarting the game
+  - returns the same state object as `image_resize_get()`
+  - optional `scene` (1-4) selects the scene to edit and makes it current;
+    defaults to the current scene, even when image resize is disabled
+  - optional global settings: `enabled` (bool), `linear_filter` (bool)
+  - optional scene settings:
+    - `offset_x`, `offset_y`: integers from -32768 to 32767, in pixels
+    - `scale_x`, `scale_y`: numbers from 0.6 to 2.5, matching the overlay sliders
+    - `keep_aspect_ratio`: bool; when true, setting either scale also sets the
+      other, and explicitly setting different scales is an error
+    - `duplicate`: 0 (none), 1 (copy left), or 2 (copy right)
+  - omitted settings are preserved; selecting a scene does not enable resizing
+    unless `enabled: true` is also supplied
+  - unknown settings, invalid types, or out-of-range values reject the entire
+    update without changing any settings
+  - this scales and positions the game image; it does not change the monitor's
+    output resolution or the OS window dimensions
+- image_resize_save()
+  - requires an API password and saves all four scenes, the enabled state, and
+    the linear filter setting to the existing screen resize config file
+  - preserves the window settings already stored in that file
+  - reports a save failure in `errors`; updates are otherwise only in memory
+  - as with the existing config, scene 1 is selected on the next game launch
+
+For example, enable scene 1 and adjust its position and independent scales:
+
+```JSON
+{
+  "id": 1,
+  "module": "resize",
+  "function": "image_resize_set",
+  "params": [{
+    "scene": 1,
+    "enabled": true,
+    "keep_aspect_ratio": false,
+    "offset_x": 8,
+    "offset_y": -4,
+    "scale_x": 0.97,
+    "scale_y": 1.02
+  }]
+}
+```
+
+Send subsequent partial updates while calibrating, then call
+`image_resize_save()` to keep the settings. These calls use the normal JSON API
+protocol over TCP or WebSocket, not HTTP POST.
+
+The focused native regression tests can be run with Python 3 and a C++20 compiler:
+`python3 api/tests/run_resize_tests.py`. They compile the production API and config
+code with portable logging/file adapters; they do not test Direct3D rendering.
 
 ## Video Stream
 
