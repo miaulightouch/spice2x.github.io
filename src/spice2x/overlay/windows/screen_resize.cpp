@@ -52,6 +52,7 @@ namespace overlay::windows {
     }
 
     void ScreenResize::reset_vars_to_default() {
+        std::lock_guard<std::mutex> lock(cfg::SCREENRESIZE->image_mutex);
         cfg::SCREENRESIZE->enable_screen_resize = false;
         cfg::SCREENRESIZE->screen_resize_current_scene = 0;
         cfg::SCREENRESIZE->enable_linear_filter = true;
@@ -102,6 +103,7 @@ namespace overlay::windows {
     }
 
     void ScreenResize::build_fullscreen_config() {
+        std::lock_guard<std::mutex> lock(cfg::SCREENRESIZE->image_mutex);
 
         ImGui::TextColored(ImVec4(1, 0.5f, 0.5f, 1.f),
             "Warning: Enabling Image Resize uses more GPU\n"
@@ -305,6 +307,7 @@ namespace overlay::windows {
 
     void ScreenResize::update() {
         Window::update();
+        std::lock_guard<std::mutex> lock(cfg::SCREENRESIZE->image_mutex);
         auto overlay_buttons = games::get_buttons_overlay(eamuse_get_game());
 
         // toggle
