@@ -1,61 +1,71 @@
-on: [push, pull_request]
-name: Continuous Integration
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+name: Publish validated Resize API Release
+
+on:
+  push:
+    branches: [release/resize-api-2026-10-16]
+
+permissions:
+  actions: read
+  contents: write
 
 jobs:
-  fw-ci:
-    name: Build
+  publish:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./src/spice2x
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_COMMIT: 36bc9a0fb751006cda4502b0eb5f1a66b69010d7
+      CI_HEAD_SHA: 0303828e8155acd88d6f4cab1584f555f1a7a2d0
+      CI_RUN_ID: '38770857262'
+      RELEASE_TAG: 26-10-16-resize-api.1
     steps:
       - uses: actions/checkout@v5
-      - name: Set ccache environment variables
-        run: |
-          echo "CCACHE_DIR=${{ github.workspace }}/src/spice2x/.ccache" >> $GITHUB_ENV
-      - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.23
-      - name: Calculate commit SHA
-        id: vars
-        run: |
-          calculatedSha=$(git rev-parse --short ${{ github.sha }})
-          echo "COMMIT_SHORT_SHA=$calculatedSha" >> $GITHUB_ENV
-      - name: Compile
-        run: ./build_docker.sh
-      - uses: actions/upload-artifact@v6
         with:
-          name: spice2x-ci-${{ env.COMMIT_SHORT_SHA }}
-          path: src/spice2x/bin
-          if-no-files-found: error
+          ref: 36bc9a0fb751006cda4502b0eb5f1a66b69010d7
+          fetch-depth: 0
+      - name: Verify successful CI and matching source tree
+        run: |
+          test "$(gh run view "$CI_RUN_ID" --json conclusion --jq .conclusion)" = success
+          test "$(gh run view "$CI_RUN_ID" --json headSha --jq .headSha)" = "$CI_HEAD_SHA"
+          git fetch origin "$CI_HEAD_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "$CI_HEAD_SHA^{tree}")"
+      - name: Verify resize API behavior
+        working-directory: src/spice2x
+        run: python3 api/tests/run_resize_tests.py
+      - name: Download validated CI binaries
+        run: |
+          artifact=$(gh api "repos/$GH_REPO/actions/runs/$CI_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.expired == false) | .name')
+          test -n "$artifact"
+          gh run download "$CI_RUN_ID" --name "$artifact" --dir "$RUNNER_TEMP/resize-ci"
+          test -f "$RUNNER_TEMP/resize-ci/spice2x/spice.exe"
+          test -f "$RUNNER_TEMP/resize-ci/spice2x/spice64.exe"
+      - name: Package standard and full distributions
+        run: |
+          cd "$RUNNER_TEMP/resize-ci/spice2x"
+          zip -qrXT9 "$RUNNER_TEMP/spice2x-$RELEASE_TAG.zip" . -x 'extras/*'
+          zip -qrXT9 "$RUNNER_TEMP/spice2x-$RELEASE_TAG-full.zip" .
+      - name: Publish prerelease
+        run: |
+          cat > "$RUNNER_TEMP/resize-api-release-notes.md" <<'NOTES'
+          Adds live image calibration through SpiceAPI:
+          - `resize.image_resize_get`: read the current state and four scenes.
+          - `resize.image_resize_set`: adjust position and scaling without restarting.
+          - `resize.image_resize_save`: persist settings; requires an API password.
 
-  msvc-ci:
-    name: Build (MSVC ${{ matrix.arch }}-bit)
-    # windows-latest ships Visual Studio 2026; pin to the VS 2022 image, which is
-    # the toolset spice2x is actually developed against
-    runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: 32
-            platform: Win32
-            target: spicetools_spice spicetools_cfg
-          - arch: 64
-            platform: x64
-            target: spicetools_spice64
-    defaults:
-      run:
-        working-directory: ./src/spice2x
-    steps:
-      - uses: actions/checkout@v5
-      - name: Configure
-        run: >
-          cmake -S . -B cmake-build-msvc-${{ matrix.arch }}
-          -A ${{ matrix.platform }}
-      - name: Compile
-        run: >
-          cmake --build cmake-build-msvc-${{ matrix.arch }}
-          --config Release --target ${{ matrix.target }}
+          Includes Python wrappers, validation, and synchronized updates.
+          See PR #1 and `src/spice2x/README.md` for API examples.
+
+          These packages promote the successful PR CI binaries. Their source tree
+          matches the merged commit exactly. This prerelease still needs testing
+          on a Windows game host.
+          NOTES
+          printf '\nCI: https://github.com/%s/actions/runs/%s\n' "$GH_REPO" "$CI_RUN_ID" \
+            >> "$RUNNER_TEMP/resize-api-release-notes.md"
+          gh release create "$RELEASE_TAG" \
+            "$RUNNER_TEMP/spice2x-$RELEASE_TAG.zip" \
+            "$RUNNER_TEMP/spice2x-$RELEASE_TAG-full.zip" \
+            --target "$RELEASE_COMMIT" \
+            --title "spice2x Resize API 2026-10-16" \
+            --notes-file "$RUNNER_TEMP/resize-api-release-notes.md" \
+            --prerelease
