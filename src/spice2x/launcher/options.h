@@ -156,6 +156,8 @@ namespace launcher {
             PathToModules,
             ScreenshotFolder,
             ConfigurationPath,
+            ConfigDirectory,
+            PortableConfig,
             ScreenResizeConfigPath,
             PatchManagerConfigPath,
             IntelSDEFolder,

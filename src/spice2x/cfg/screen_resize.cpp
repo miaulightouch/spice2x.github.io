@@ -19,7 +19,7 @@ namespace cfg {
     ScreenResize::ScreenResize() {
         bool file_exists = false;
         if (SCREEN_RESIZE_CFG_PATH_OVERRIDE.has_value()) {
-            this->config_path = SCREEN_RESIZE_CFG_PATH_OVERRIDE.value();
+            this->config_path = fileutils::expand_config_path(SCREEN_RESIZE_CFG_PATH_OVERRIDE.value());
             if (fileutils::file_exists(this->config_path)) {
                 log_info("ScreenResize", "loading config from: {}", this->config_path);
                 file_exists = true;

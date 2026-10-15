@@ -283,6 +283,11 @@ int main_implementation(int argc, char *argv[]) {
         launcher::USE_CMD_OVERRIDE = true;
     }
 
+    // Resolve the storage root before loading XML/game option overrides.
+    fileutils::set_config_directory(
+        LAUNCHER_OPTIONS->at(launcher::Options::ConfigDirectory).value_text(),
+        LAUNCHER_OPTIONS->at(launcher::Options::PortableConfig).value_bool());
+
     // determine config file path - must be done before anything else
     const auto &cfg_path = LAUNCHER_OPTIONS->at(launcher::Options::ConfigurationPath);
     if (cfg_path.is_active()) {
