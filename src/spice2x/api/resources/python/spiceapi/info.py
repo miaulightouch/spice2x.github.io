@@ -15,3 +15,8 @@ def info_launcher(con: Connection):
 def info_memory(con: Connection):
     res = con.request(Request("info", "memory"))
     return res.get_data()[0]
+
+
+def info_log(con: Connection, offset=None, limit=65536):
+    """Read a bounded base64 chunk of the active log; None reads the tail."""
+    return con.request(Request("info", "log", [offset, limit])).get_data()[0]

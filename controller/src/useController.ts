@@ -7,6 +7,7 @@ import { ResizeQueue, defaultScene, parseResize } from './api/resize';
 import type { ResizePatch, ResizeState } from './api/resize';
 import type { TextValue } from './i18n';
 import type { Profile } from './storage';
+import { readLog as fetchLog, downloadLog as fetchLogFile } from './api/log';
 
 export function useController() {
   const status = ref<ConnectionStatus>('disconnected');
@@ -27,6 +28,8 @@ export function useController() {
   const imageTime = ref('');
   const capturing = ref(false);
   const configuredPassword = ref(false);
+  const logText = ref('');
+  const logSize = ref(0);
   const connected = computed(() => demo.value || status.value === 'connected');
   const api = shallowRef<Rpc>();
   let client: SpiceClient | undefined;
@@ -50,6 +53,7 @@ export function useController() {
     image.value = ''; imageTime.value = ''; game.value = ''; version.value = '';
     configuredPassword.value = false; applying.value = false; unsaved.value = false;
     coinQueue.value = undefined; activeProfile = undefined; resizeApplyError = undefined;
+    logText.value = ''; logSize.value = 0;
   }
 
   async function connect(profile: Profile): Promise<void> {
@@ -229,9 +233,7 @@ export function useController() {
       const name = exactButton(label);
       if (!name) throw new LocalizedError('error.button', { label });
       const rpc = api.value!;
-      await rpc.request('buttons', 'write', [[name, true]]);
-      try { await new Promise(resolve => setTimeout(resolve, 180)); }
-      finally { await rpc.request('buttons', 'write_reset', [[name]]); }
+      await rpc.request('buttons', 'pulse', [name, 180]);
       notify(msg('msg.pulsed', { label: label.toUpperCase() }));
     });
   }
@@ -282,9 +284,29 @@ export function useController() {
     finally { next.disconnect(); if (captureClient === next) captureClient = undefined; capturing.value = false; }
   }
 
+  async function readLog(): Promise<void> {
+    await action('log', async () => {
+      if (!demo.value && !configuredPassword.value) throw new LocalizedError('error.logPassword');
+      const epoch = generation;
+      const chunk = await fetchLog(api.value!);
+      if (epoch !== generation) return;
+      logText.value = new TextDecoder().decode(chunk.bytes); logSize.value = chunk.size;
+    });
+  }
+  async function downloadLog(): Promise<Blob | undefined> {
+    let file: Blob | undefined;
+    await action('log-download', async () => {
+      if (!demo.value && !configuredPassword.value) throw new LocalizedError('error.logPassword');
+      const epoch = generation;
+      file = await fetchLogFile(api.value!, () => epoch === generation);
+    });
+    return file;
+  }
+
   return { status, demo, message, error, busy, latency, game, version, buttons, coinQueue, resize, resizeError,
     applying, unsaved, image, imageTime, capturing, configuredPassword, connected,
     connect, startDemo, disconnect, notify, report, updateResize, selectScene, readResize, saveResize,
     machineControl, pulse, exactButton, releaseButtons, insertCoin, insertCard, getMachineCards, keypad, capture,
+    logText, logSize, readLog, downloadLog,
     currentScene: computed(() => resize.value?.scenes[(resize.value?.scene ?? 1) - 1] ?? defaultScene()) };
 }

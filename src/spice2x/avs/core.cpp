@@ -1486,7 +1486,10 @@ namespace avs {
 
             // remember actually used path
             if (LOG_FILE != INVALID_HANDLE_VALUE) {
-                LOG_FILE_PATH = LOG_PATH;
+                std::error_code error;
+                const auto path = std::filesystem::absolute(LOG_PATH, error);
+                if (!error) LOG_FILE_PATH = path.string();
+                else log_warning("avs-core", "unable to resolve active log path: {}", error.message());
             }
         }
 

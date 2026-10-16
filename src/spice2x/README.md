@@ -169,6 +169,11 @@ restriction is that the ID has to be a valid 64-bit unsigned integer.
   - returns the current coin blocker state (false: open, true: closed)
 
 #### Info
+- log(offset: uint64|null = null, limit: uint = 65536)
+  - requires an API password and reads only this process's active log
+  - returns one object with byte `offset`, `next`, `size`, and base64 `data`
+  - null offset reads the tail; explicit offsets support full downloads
+  - limit is 1–262144 bytes; no file-path parameter is accepted
 - avs()
   - returns a dict including the AVS model, dest, spec, rev and ext
 - launcher()
@@ -192,6 +197,9 @@ the single digit numbers, "A" for the double zero and "D" for the decimal key.
   - returns all pressed keys of the specified keypad
 
 #### Analogs/Buttons/Lights
+
+This fork adds `buttons.pulse(name, duration_ms=180)` with a duration of 1–2000 ms. It presses and releases one button within a single server request, including when the client disconnects. A button with an existing override is rejected.
+
 All of those three modules have equally named methods for you to call.
 - read()
   - returns an array of state objects containing name, state and a bool
@@ -349,7 +357,7 @@ A successful save confirms an accepted file write, not rendering or retention th
   - preserves the window settings already stored in that file
   - reports a save failure in `errors`; updates are otherwise only in memory
   - restores the saved active scene on the next game launch; legacy files without
-    a selected scene default to scene 1. See [persistence troubleshooting](../../docs/Fork-setup.md#settings-after-restarting)
+    a selected scene default to scene 1. See [persistence troubleshooting](https://github.com/miaulightouch/spice2x.github.io/wiki/Fork-setup#settings-after-restarting)
     for Embedded write filters and the `-configdir` / `-portable` storage options
 
 For example, enable scene 1 and adjust its position and independent scales:

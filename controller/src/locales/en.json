@@ -192,5 +192,15 @@
   "error.extra": "Extra API response data; connection closed.",
   "error.response": "API response format or request ID does not match.",
   "error.key": "API did not provide a valid session key.",
-  "msg.savedStatus": "{summary} {state}"
+  "msg.savedStatus": "{summary} {state}",
+  "log.title": "Cabinet log",
+  "log.hint": "Shows the latest 64 KiB. Download retrieves the complete log at the start of the request. An API password is required.",
+  "log.refresh": "Refresh log",
+  "log.download": "Download log",
+  "log.size": "{n} bytes",
+  "log.search": "Filter lines",
+  "log.empty": "No log loaded.",
+  "error.logFormat": "Invalid log response.",
+  "error.logChanged": "The log changed while downloading. Refresh and try again.",
+  "error.logPassword": "Connect with an API password to read logs."
 }
