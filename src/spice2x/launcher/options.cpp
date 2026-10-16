@@ -1579,16 +1579,6 @@ static const std::vector<OptionDefinition> OPTION_DEFINITIONS = std::invoke([]()
         .category = "Path Overrides",
         .disabled = true,
     };
-    c[launcher::Options::ScreenResizeConfigPath] = {
-        .title = "Screen Resize Config Path Override",
-        .name = "resizecfgpath",
-        .desc = "Sets a custom file path for screen resize config file. Expands environment variables. "
-            "If left empty, %appdata%\\spice2x\\spicetools_screen_resize.json will be used.",
-        .type = OptionType::Text,
-        .category = "Path Overrides",
-        .picker = OptionPickerType::FilePath,
-        .file_extension = "JSON",
-    };
     c[launcher::Options::PatchManagerConfigPath] = {
         .title = "Patch Manager Config Path Override",
         .name = "patchcfgpath",

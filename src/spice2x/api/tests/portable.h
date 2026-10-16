@@ -22,7 +22,6 @@ inline std::string eamuse_get_game() {
 }
 
 namespace fileutils {
-    inline std::filesystem::path expand_config_path(const std::filesystem::path &path) { return path; }
     inline bool file_exists(const std::filesystem::path &path) {
         return std::filesystem::exists(path);
     }

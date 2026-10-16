@@ -158,7 +158,6 @@ namespace launcher {
             ConfigurationPath,
             ConfigDirectory,
             PortableConfig,
-            ScreenResizeConfigPath,
             PatchManagerConfigPath,
             IntelSDEFolder,
             PathToEa3Config,
