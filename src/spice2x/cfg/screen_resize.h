@@ -33,6 +33,7 @@ namespace cfg {
     class ScreenResize {
     private:
         std::filesystem::path config_path;
+        std::mutex config_mutex; // serialize config I/O outside image_mutex
         // bool config_dirty = false;
 
         bool load_bool_value(rapidjson::Document& doc, std::string path, bool& value);

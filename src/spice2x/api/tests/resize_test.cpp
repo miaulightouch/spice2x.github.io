@@ -1,7 +1,10 @@
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <iostream>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -54,6 +57,13 @@ static bool near(double actual, double expected) {
     return std::abs(actual - expected) < 0.00001;
 }
 
+static void wait_for_resize_write() {
+    std::unique_lock<std::mutex> lock(resize_test_io_mutex);
+    CHECK(resize_test_io_cv.wait_for(lock, std::chrono::seconds(2), [] {
+        return resize_test_write_started;
+    }));
+}
+
 int main() {
     api::modules::Resize module;
     for (const auto *function : {"image_resize_get", "image_resize_set",
@@ -91,17 +101,55 @@ int main() {
     CHECK(cfg::SCREENRESIZE->need_surface_clean);
     CHECK(result["data"][0]["scenes"][0]["offset_x"].GetInt() == 0);
 
+    cfg::SCREENRESIZE->need_surface_clean = false;
+    result = call(module, "image_resize_set", R"([{}])");
+    CHECK(result["errors"].Empty());
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = true;
+    result = call(module, "image_resize_set", R"([{}])");
+    CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
     result = call(module, "image_resize_set", R"([{"offset_x":9}])");
     CHECK(result["errors"].Empty());
     CHECK(result["data"][0]["scenes"][1]["offset_x"].GetInt() == 9);
     CHECK(near(result["data"][0]["scenes"][1]["scale_y"].GetDouble(), 1.02));
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
+    result = call(module, "image_resize_set", R"([{"offset_x":9}])");
+    CHECK(result["errors"].Empty());
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
 
+    result = call(module, "image_resize_set", R"([{"linear_filter":true}])");
+    CHECK(result["errors"].Empty());
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
+    result = call(module, "image_resize_set", R"([{"linear_filter":false}])");
+    CHECK(result["errors"].Empty());
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
+    result = call(module, "image_resize_set", R"([{"duplicate":1}])");
+    CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
+    result = call(module, "image_resize_set", R"([{"duplicate":2}])");
+    CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
     result = call(module, "image_resize_set",
         R"([{"keep_aspect_ratio":true,"scale_x":1.2}])");
     CHECK(result["errors"].Empty());
     CHECK(near(result["data"][0]["scenes"][1]["scale_y"].GetDouble(), 1.2));
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
     result = call(module, "image_resize_set", R"([{"scale_y":1.3}])");
     CHECK(near(result["data"][0]["scenes"][1]["scale_x"].GetDouble(), 1.3));
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
+
+    result = call(module, "image_resize_set", R"([{"scene":3}])");
+    CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
+    result = call(module, "image_resize_set", R"([{"scene":2}])");
+    CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
 
     const auto before = state_json(module);
     const std::vector<std::string> invalid = {
@@ -134,13 +182,18 @@ int main() {
     result = call(module, "image_resize_set_scene", "[0]");
     CHECK(result["errors"].Empty() && result["data"].Empty());
     CHECK(!cfg::SCREENRESIZE->enable_screen_resize);
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
     result = call(module, "image_resize_set", R"([{"scene":3,"offset_x":10}])");
     CHECK(!result["data"][0]["enabled"].GetBool());
     result = call(module, "image_resize_enable", "[true]");
     CHECK(result["errors"].Empty() && result["data"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
     CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 2);
     result = call(module, "image_resize_set_scene", "[4]");
     CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
     CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 3);
     for (const auto *params : {"[]", "[5]", "[-1]", "[false]"}) {
         CHECK(call(module, "image_resize_set_scene", params)["errors"].Size() == 1);
@@ -169,8 +222,164 @@ int main() {
     CHECK(call(module, "image_resize_save")["errors"].Size() == 1);
     resize_test_write_failure = false;
 
+    // A full save snapshots every window setting while preserving the image state.
+    cfg::SCREENRESIZE->window_always_on_top = true;
+    cfg::SCREENRESIZE->enable_window_resize = true;
+    cfg::SCREENRESIZE->client_keep_aspect_ratio = false;
+    cfg::SCREENRESIZE->window_decoration = 2;
+    cfg::SCREENRESIZE->client_width = 1600;
+    cfg::SCREENRESIZE->client_height = 900;
+    cfg::SCREENRESIZE->window_offset_x = -11;
+    cfg::SCREENRESIZE->window_offset_y = 22;
+    CHECK(cfg::SCREENRESIZE->config_save(false));
+    saved.Parse(fileutils::text_read("spicetools_screen_resize.json").c_str());
+    const auto &full_saved_game = saved["sp2x_games"]["Resize API Test"];
+    CHECK(full_saved_game["w_always_on_top"].GetBool());
+    CHECK(full_saved_game["w_enable_resize"].GetBool());
+    CHECK(!full_saved_game["w_keep_aspect_ratio"].GetBool());
+    CHECK(full_saved_game["w_border_type"].GetInt() == 2);
+    CHECK(full_saved_game["w_width"].GetUint() == 1600);
+    CHECK(full_saved_game["w_height"].GetUint() == 900);
+    CHECK(full_saved_game["w_offset_x"].GetInt() == -11);
+    CHECK(full_saved_game["w_offset_y"].GetInt() == 22);
+
+    // Saving must release the drawing lock while its file write is blocked, and
+    // concurrent saves must commit in snapshot order.
+    call(module, "image_resize_set", R"([{"scene":4,"offset_x":10}])");
+    {
+        std::lock_guard<std::mutex> lock(resize_test_io_mutex);
+        resize_test_block_write = true;
+        resize_test_write_started = false;
+        resize_test_write_count = 0;
+    }
+    std::atomic<bool> first_save_ok = false;
+    std::thread first_save([&first_save_ok] {
+        first_save_ok = cfg::SCREENRESIZE->config_save(true);
+    });
+    wait_for_resize_write();
+    const bool drawing_lock_available = cfg::SCREENRESIZE->image_mutex.try_lock();
+    CHECK(drawing_lock_available);
+    if (drawing_lock_available) {
+        cfg::SCREENRESIZE->image_mutex.unlock();
+    }
+
+    call(module, "image_resize_set", R"([{"scene":1,"offset_x":123}])");
+    std::atomic<bool> second_save_ok = false;
+    std::mutex second_start_mutex;
+    std::condition_variable second_start_cv;
+    bool second_save_started = false;
+    std::thread second_save([&] {
+        {
+            std::lock_guard<std::mutex> lock(second_start_mutex);
+            second_save_started = true;
+        }
+        second_start_cv.notify_one();
+        second_save_ok = cfg::SCREENRESIZE->config_save(true);
+    });
+    {
+        std::unique_lock<std::mutex> lock(second_start_mutex);
+        CHECK(second_start_cv.wait_for(lock, std::chrono::seconds(2), [&second_save_started] {
+            return second_save_started;
+        }));
+    }
+    {
+        std::unique_lock<std::mutex> lock(resize_test_io_mutex);
+        const bool second_write_entered = resize_test_io_cv.wait_for(
+            lock, std::chrono::milliseconds(500), [] {
+                return resize_test_write_count >= 2;
+            });
+        CHECK(!second_write_entered);
+        CHECK(resize_test_write_count == 1);
+    }
+    {
+        std::lock_guard<std::mutex> lock(resize_test_io_mutex);
+        resize_test_block_write = false;
+        resize_test_write_started = false;
+    }
+    resize_test_io_cv.notify_all();
+    first_save.join();
+    second_save.join();
+    CHECK(first_save_ok);
+    CHECK(second_save_ok);
+    CHECK(resize_test_write_count == 2);
+    saved.Parse(fileutils::text_read("spicetools_screen_resize.json").c_str());
+    CHECK(!saved.HasParseError() && saved.IsObject());
+    CHECK(saved["sp2x_games"]["Resize API Test"]["screen_resize_current_scene"].GetInt() == 0);
+    CHECK(saved["sp2x_games"]["Resize API Test"]["scenes"][0]["offset_x"].GetInt() == 123);
+
+    // Restore the state used by the following load assertions.
+    CHECK(call(module, "image_resize_set", R"([{"scene":4,"offset_x":0}])")["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->config_save(true));
+
+    // A load must wait for a save that already owns the config I/O sequence.
+    CHECK(call(module, "image_resize_set", R"([{"scene":1,"offset_x":321}])")["errors"].Empty());
+    {
+        std::lock_guard<std::mutex> lock(resize_test_io_mutex);
+        resize_test_block_write = true;
+        resize_test_write_started = false;
+        resize_test_write_count = 0;
+    }
+    std::atomic<bool> blocked_save_ok = false;
+    std::thread blocked_save([&blocked_save_ok] {
+        blocked_save_ok = cfg::SCREENRESIZE->config_save(true);
+    });
+    wait_for_resize_write();
+
+    std::mutex load_start_mutex;
+    std::condition_variable load_start_cv;
+    bool load_started = false;
+    std::mutex load_done_mutex;
+    std::condition_variable load_done_cv;
+    bool load_done = false;
+    std::thread load([&] {
+        {
+            std::lock_guard<std::mutex> lock(load_start_mutex);
+            load_started = true;
+        }
+        load_start_cv.notify_one();
+        cfg::SCREENRESIZE->config_load();
+        {
+            std::lock_guard<std::mutex> lock(load_done_mutex);
+            load_done = true;
+        }
+        load_done_cv.notify_one();
+    });
+    {
+        std::unique_lock<std::mutex> lock(load_start_mutex);
+        CHECK(load_start_cv.wait_for(lock, std::chrono::seconds(2), [&load_started] {
+            return load_started;
+        }));
+    }
+    bool load_finished_while_save_blocked;
+    {
+        std::unique_lock<std::mutex> lock(load_done_mutex);
+        load_finished_while_save_blocked = load_done_cv.wait_for(
+            lock, std::chrono::milliseconds(500), [&load_done] {
+                return load_done;
+            });
+    }
+    {
+        std::lock_guard<std::mutex> lock(resize_test_io_mutex);
+        resize_test_block_write = false;
+        resize_test_write_started = false;
+    }
+    resize_test_io_cv.notify_all();
+    blocked_save.join();
+    load.join();
+    CHECK(blocked_save_ok);
+    CHECK(!load_finished_while_save_blocked);
+    {
+        std::lock_guard<std::mutex> lock(cfg::SCREENRESIZE->image_mutex);
+        CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 0);
+        CHECK(cfg::SCREENRESIZE->scene_settings[0].offset_x == 321);
+    }
+
+    CHECK(call(module, "image_resize_set", R"([{"scene":4,"offset_x":0}])")["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->config_save(true));
+
     cfg::SCREENRESIZE = std::make_unique<cfg::ScreenResize>();
     CHECK(cfg::SCREENRESIZE->enable_screen_resize);
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
     CHECK(!cfg::SCREENRESIZE->enable_linear_filter);
     CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 3);
     CHECK(cfg::SCREENRESIZE->scene_settings[2].offset_x == 10);

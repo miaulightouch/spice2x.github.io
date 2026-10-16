@@ -104,6 +104,9 @@ namespace overlay::windows {
 
     void ScreenResize::build_fullscreen_config() {
         std::lock_guard<std::mutex> lock(cfg::SCREENRESIZE->image_mutex);
+        const bool old_enabled = cfg::SCREENRESIZE->enable_screen_resize;
+        const auto old_scene = cfg::SCREENRESIZE->screen_resize_current_scene;
+        const auto old_duplicate = cfg::SCREENRESIZE->scene_settings[old_scene].duplicate;
 
         ImGui::TextColored(ImVec4(1, 0.5f, 0.5f, 1.f),
             "Warning: Enabling Image Resize uses more GPU\n"
@@ -171,7 +174,7 @@ namespace overlay::windows {
         }
 
         static const char* dupe_items[] = { "None", "Copy Left", "Copy Right" };
-        const bool duplicate_changed = ImGui::Combo(
+        ImGui::Combo(
             "Duplicate",
             reinterpret_cast<int *>(&scene.duplicate),
             dupe_items,
@@ -184,7 +187,9 @@ namespace overlay::windows {
         ImGui::EndDisabled();
 
         // tell d3d9 device to clear surface to get rid of ghost image
-        if (duplicate_changed) {
+        if ((!old_enabled && cfg::SCREENRESIZE->enable_screen_resize) ||
+                old_scene != cfg::SCREENRESIZE->screen_resize_current_scene ||
+                old_duplicate != scene.duplicate) {
             cfg::SCREENRESIZE->need_surface_clean = true;
         }
     }
@@ -308,6 +313,8 @@ namespace overlay::windows {
     void ScreenResize::update() {
         Window::update();
         std::lock_guard<std::mutex> lock(cfg::SCREENRESIZE->image_mutex);
+        const bool old_enabled = cfg::SCREENRESIZE->enable_screen_resize;
+        const auto old_scene = cfg::SCREENRESIZE->screen_resize_current_scene;
         auto overlay_buttons = games::get_buttons_overlay(eamuse_get_game());
 
         // toggle
@@ -363,5 +370,10 @@ namespace overlay::windows {
         }
         // remember if a key was pressed (or nothing pressed) this frame
         this->toggle_scene_state = toggle_scene_state_new;
+
+        if ((!old_enabled && cfg::SCREENRESIZE->enable_screen_resize) ||
+                old_scene != cfg::SCREENRESIZE->screen_resize_current_scene) {
+            cfg::SCREENRESIZE->need_surface_clean = true;
+        }
     }
 }
