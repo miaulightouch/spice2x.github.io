@@ -1,4 +1,11 @@
 ## Contributing
+
+For this fork, follow [the fork workflow](docs/Fork-workflow.md): edit source on a
+task branch, open a pull request to this fork's `main`, and pass the required
+checks before merging. The upstream contribution and compatibility rules below
+still apply. Existing upstream workflows stay unchanged unless explicitly
+authorized. Do not create a replacement release workflow or release branch.
+
 Baseline rules for patch submissions are as follows. Any patches violating the rules below will not be accepted.
 
 To contribute, fork the repo (just the main branch), make changes in your fork, and contribute to upstream by opening a pull request to the main repo.
