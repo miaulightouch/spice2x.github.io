@@ -198,7 +198,7 @@ the single digit numbers, "A" for the double zero and "D" for the decimal key.
 
 #### Analogs/Buttons/Lights
 
-This fork adds `buttons.pulse(name, duration_ms=180)` with a duration of 1–2000 ms. It presses and releases one button within a single server request, including when the client disconnects. A button with an existing override is rejected.
+`buttons.pulse(name, duration_ms=180)` holds one button for 1–2000 ms and releases it even if the client disconnects. A button with an existing override is rejected.
 
 All of those three modules have equally named methods for you to call.
 - read()
@@ -357,7 +357,7 @@ A successful save confirms an accepted file write, not rendering or retention th
   - preserves the window settings already stored in that file
   - reports a save failure in `errors`; updates are otherwise only in memory
   - restores the saved active scene on the next game launch; legacy files without
-    a selected scene default to scene 1. See [persistence troubleshooting](https://github.com/miaulightouch/spice2x.github.io/wiki/Fork-setup#settings-after-restarting)
+    a selected scene default to scene 1. See [persistence troubleshooting](https://github.com/miaulightouch/spice2x.github.io/wiki/Setup#settings-after-restarting)
     for Embedded write filters and the `-configdir` / `-portable` storage options
 
 For example, enable scene 1 and adjust its position and independent scales:
