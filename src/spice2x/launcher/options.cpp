@@ -1563,7 +1563,7 @@ static const std::vector<OptionDefinition> OPTION_DEFINITIONS = std::invoke([]()
     c[launcher::Options::PortableConfig] = {
         .title = "Portable Config",
         .name = "portable",
-        .desc = "Reads and writes spice2x settings beside the running EXE. Command line only. "
+        .desc = "Uses the EXE directory in place of AppData, preserving the config layout. Command line only. "
             "An explicit -configdir or per-file path takes priority.",
         .type = OptionType::Bool,
         .category = "Path Overrides",
