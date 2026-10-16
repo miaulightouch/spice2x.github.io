@@ -64,14 +64,17 @@ namespace graphics::opengl {
         // Match D3D9's source-pixel offsets. API Y is positive down; OpenGL Y is up.
         const float left = (width - w) * .5f + scene.offset_x * scene.scale_x;
         const float bottom = (height - h) * .5f - scene.offset_y * scene.scale_y;
-        const float u = static_cast<float>(width) / tw;
-        const float v = static_cast<float>(height) / th;
+        // Texel centers keep linear sampling inside the current image when a larger texture is reused.
+        const float u0 = linear_filter ? .5f / tw : 0.f;
+        const float v0 = linear_filter ? .5f / th : 0.f;
+        const float u1 = linear_filter ? (width - .5f) / tw : static_cast<float>(width) / tw;
+        const float v1 = linear_filter ? (height - .5f) / th : static_cast<float>(height) / th;
         const auto quad = [&](float x) {
             gl.glBegin(GL_QUADS);
-            gl.glTexCoord2f(0, 0); gl.glVertex2f(x, bottom);
-            gl.glTexCoord2f(u, 0); gl.glVertex2f(x + w, bottom);
-            gl.glTexCoord2f(u, v); gl.glVertex2f(x + w, bottom + h);
-            gl.glTexCoord2f(0, v); gl.glVertex2f(x, bottom + h);
+            gl.glTexCoord2f(u0, v0); gl.glVertex2f(x, bottom);
+            gl.glTexCoord2f(u1, v0); gl.glVertex2f(x + w, bottom);
+            gl.glTexCoord2f(u1, v1); gl.glVertex2f(x + w, bottom + h);
+            gl.glTexCoord2f(u0, v1); gl.glVertex2f(x, bottom + h);
             gl.glEnd();
         };
         quad(left);
