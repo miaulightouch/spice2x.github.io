@@ -62,7 +62,7 @@ The application does not change EWF/FBWF settings. A successful save means the O
 
 The fork adds `resize.image_resize_get`, `resize.image_resize_set`, and `resize.image_resize_save`; see the [API reference](../src/spice2x/README.md#resize). The save API preserves existing window settings. Scene persistence and validation are shared code on all Windows builds; the WGL hook and XP power flags remain guarded by `SPICE_XP`.
 
-Web source is in `controller/` on the [`feature/web-controller`](https://github.com/miaulightouch/spice2x.github.io/tree/feature/web-controller/controller) branch. Built assets are deployed from `gh-pages`. See that directory's README for local development. This fork does not require changes to upstream GitHub Actions on the main branch.
+Web source is in [`controller/`](../controller/) on `main`. GitHub Actions builds and deploys Pages from that source after the controller and fork regression checks pass. See that directory's README for local development and the [fork workflow](Fork-workflow.md) for contributions and releases.
 
 ## OpenGL latency
 
@@ -72,4 +72,4 @@ An identity scene (100% on both axes, zero offsets, no duplication) now bypasses
 
 ## Fork versions
 
-Release names, tags and archive bases use `<upstream version>-<build number>`, recorded in `FORK_VERSION` and validated by `python3 scripts/fork_version.py`. For example, `26-10-03-1` is the first build using the new convention for upstream version `26-10-03`; increment the build number for subsequent fork releases. The source base is upstream main `c83496776e4dfa06f286e483d21fd269c331505c` (2026-10-12), including upstream changes after release `26-10-03`. Release notes retain the exact source commit and upstream snapshot provenance. Existing historical tags remain available for old links.
+Fork release names and tags use `<upstream version>-<build number>`, recorded in `FORK_VERSION` and validated by `python3 scripts/fork_version.py`. Archive bases are `spice2x-<version>`. For example, `26-10-03-1` is the first build using this convention for upstream version `26-10-03`; increment the build number for subsequent fork releases. `UPSTREAM_BASE` records the exact upstream source snapshot, which can include commits after the upstream release. The local packager adds `FORK_VERSION`, `RELEASE.json`, complete native/controller source and `SHA256SUMS`; it is not connected to the unchanged upstream release workflow. Existing historical tags and binary assets remain available for old links; see the [release history](Releases.md).
