@@ -1,52 +1,46 @@
 # Fork setup and usage
 
-These instructions cover this fork's additions. See the [upstream wiki](https://github.com/spice2x/spice2x.github.io/wiki) for general spice2x behavior.
+[Controller](https://miaulightouch.github.io/spice2x.github.io/) · [Downloads](https://github.com/miaulightouch/spice2x.github.io/releases) · [Upstream guide](https://github.com/spice2x/spice2x.github.io/wiki)
 
 ## Web controller
 
-Open [Arcade Room](https://miaulightouch.github.io/spice2x.github.io/). The language selector supports English, Traditional Chinese, Simplified Chinese, Japanese, and Korean. The initial language follows the browser; your selection is remembered on that browser.
+1. Install this fork's binary. For Windows XP, use the XP archive or `extras/winxp` executables.
+2. Add `-api 1337 -apipass YOUR_PASSWORD` to the launch command.
+3. Open the controller. In **Connection**, enter `ws://CABINET_IP:1338` and the same password. The WebSocket port is always the API port + 1.
+4. Adjust **Screen**, then select **Save to cabinet** to keep all scenes and the selected scene after restarting.
 
-1. Use a binary from this fork's [releases](https://github.com/miaulightouch/spice2x.github.io/releases). On Windows XP, use the XP archive or `extras/winxp` executables from the full archive.
-2. Add `-api 1337 -apipass YOUR_PASSWORD` to your existing launch command. The WebSocket port is the API port plus one: `ws://CABINET_IP:1338` in this example.
-3. Connect from a device that can reach the cabinet; allow the browser's local-network permission when prompted. Enter the endpoint and the same API password in Connection.
-4. Adjust the image under Screen. Changes apply immediately; **Save to cabinet** writes all four scenes, the active scene, enabled state, and filtering to the cabinet's config file.
+Use Chrome or Edge and allow local-network access. If the browser requires `wss://`, provide a TLS gateway; the cabinet endpoint only supports `ws://`.
 
-The controller also provides service/test pulses, button release, coins, saved cards, P1/P2 keypads, game restart/exit, and Windows restart/power-off. Game and power actions require an API password and confirmation. A dropped connection does not retry an action. A cabinet startup script may relaunch a game after Exit.
+Cards and profiles stay in the browser. Passwords are saved only with **Remember password**. Demo mode sends no cabinet commands. Offline mode opens the interface; cabinet controls still need a connection.
 
-Profiles and cards stay in the current browser. Passwords are only stored when Remember password is selected. The explicit demo mode sends no cabinet commands. The cached interface can open offline; cabinet operations require network access.
+## Logs and controls
 
-Prefer a current Chrome or Edge with local-network permission for an HTTPS page connecting to a private-IP `ws://` endpoint. Where the browser requires TLS, supply a valid `wss://` gateway; spice2x's native WebSocket endpoint does not provide TLS. See [Chrome's local-network guidance](https://developer.chrome.com/blog/local-network-access).
+Log access, automatic Service/Test release and startup display-mode logging require a cabinet build containing [PR #9](https://github.com/miaulightouch/spice2x.github.io/pull/9).
 
-## Logs
+In **System**, **Refresh log** shows the latest 64 KiB; the filter matches lines. **Download log** retrieves the complete log at request time. An API password is required; only the current process's log is accessible.
 
-In **System**, use **Refresh log** to view the latest 64 KiB, filter lines, or **Download log** to retrieve the complete log as it existed when the request began. Log access requires an API password and reads only the active log of this process. Log text is displayed locally and is not sent to another service.
+Startup logs list available resolutions, refresh rates, color depths and interlace flags. `-sysdump none` disables this listing.
 
-Startup GPU information lists each attached display's available resolutions, refresh rates, color depths and interlace flags. It reports driver-provided modes without changing the display configuration; the existing system-information skip option also skips this listing.
-
-Service/Test pulses require this fork's `buttons.pulse` API. The cabinet releases the button after 180 ms even if the browser disconnects; older builds report an unsupported function rather than falling back to a persistent button write.
+Service/Test releases automatically after 180 ms, including after disconnection. Older builds report an unsupported function. Game and power actions require a password and confirmation.
 
 ## Image calibration
 
-The transform changes the game image, not the Windows window size or output resolution. It supports 60–250% scaling, pixel offsets, aspect lock, linear filtering, and left/right duplication. Editing or selecting a scene in the Web controller enables resizing; explicitly disabling it can also be saved.
+Scaling (60–250%), offsets, aspect lock, filtering and duplication affect the game image. Windows resolution and window size are unchanged.
 
-Direct3D 9 uses the existing rendering path. `SPICE_XP` builds additionally support jubeat's legacy OpenGL path using OpenGL 1.1 and a separate WGL context. Non-XP builds do not compile or initialize that backend. The driver must support a power-of-two texture large enough for the image. Diagnostic messages use `graphics::opengl` in the log.
+Supported paths: Direct3D 9, plus jubeat's legacy OpenGL on XP builds. Other paths may accept settings without rendering them. The grid and capture are previews; check the cabinet image.
 
-Other rendering paths can accept settings without displaying the transform. OpenGL capture and overlay support are unchanged. The grid is a preview, and cabinet capture is a manually refreshed still image; neither is proof that the game rendered the saved transform.
+Active XP OpenGL calibration may add latency; verify on the cabinet.
 
 ## Config paths and portable use
 
-Settings can be read and written anywhere the Windows account has permission:
-
-| Launch option | Storage |
+| Option | Settings location |
 | --- | --- |
-| `-configdir "%APPDATA%\spice"` | Main `spicetools.xml` and helper settings in that directory |
-| `-configdir "E:\spice-config"` | The same files in any chosen directory |
-| `-portable` | Replace the AppData root with the EXE directory, preserving the upstream layout |
-| `-cfgpath "%APPDATA%\spice\custom.xml"` | Override just the main XML file |
+| Default | `%APPDATA%\spicetools.xml`; helper files under `%APPDATA%\spice2x\` |
+| `-portable` | Replace `%APPDATA%` with the EXE directory; keep the same tree |
+| `-configdir "E:\spice-config"` | Main XML and all helper files directly in that directory |
+| `-cfgpath "E:\custom.xml"` | Override only the main XML |
 
-`-configdir` and `-portable` are command-line options, resolved before the main XML is read. Use the same option when launching the configurator separately. Per-file overrides take precedence over `-configdir`, which takes precedence over `-portable`. The shared root covers main XML, resize, patch manager, card manager, controller presets and camera settings. Calibration always uses `spicetools_screen_resize.json` within that root. It does not redirect game NVRAM/data or logs.
-
-Environment variables are expanded by the program, including paths entered without a CMD wrapper. Missing variables retain Windows' normal unexpanded spelling. Relative directory/file overrides keep working-directory semantics; `-portable` always uses the EXE directory. Required directories are created when possible. These modes do not read from the original AppData directory or migrate files automatically. For `-configdir`, copy the main XML and helper files directly into the chosen directory. For `-portable`, preserve their paths relative to AppData:
+Portable tree:
 
 ```text
 EXE directory/
@@ -59,32 +53,15 @@ EXE directory/
     └── spicetools_camera_control.json
 ```
 
-Existing helper files at the portable root remain supported; files under `spice2x/` take priority, matching upstream lookup.
+Priority: per-file override > `-configdir` > `-portable` > defaults. Use the same options for the configurator. Relative overrides use the working directory; environment variables are expanded. Copy existing settings yourself. Logs and game data keep their original paths.
 
-Without these new options, upstream AppData and legacy lookup behavior is unchanged. A portable directory on a write-protected or write-filtered volume still needs an appropriate persistent location.
+Legacy helper files at the AppData/portable root remain supported; `spice2x/` takes priority. Calibration under `-configdir` always uses that directory's `spicetools_screen_resize.json`.
 
 ## Settings after restarting
 
-By default, the cabinet stores calibration in `%APPDATA%\spice2x\spicetools_screen_resize.json`; an existing legacy `%APPDATA%\spicetools_screen_resize.json` may be used instead. Settings are per game. Keep the same Windows account, config path, and game identity when restarting.
+Settings are per game. Keep the same Windows account, config path and game identity. After upgrading from a build that forgot the selected scene, select it and save once.
 
-New saves remember the selected scene. Older releases always started on Scene 1 even if another scene was saved. After upgrading, choose the intended scene and save once. Old config files without a selected-scene field continue to start on Scene 1.
+- Resets after a game restart: check the path and `ScreenResize` load/save log entries.
+- Resets only after Windows restarts: check EWF/FBWF write filters and startup scripts. Use a writable location verified to survive reboot, then save and retest. A successful save cannot bypass a write filter.
 
-Windows XP Embedded may use EWF or FBWF. Writes to a protected volume can succeed in a temporary overlay and disappear at a full reboot; this behavior is not specific to Konami. See [Microsoft's write-filter overview](https://techcommunity.microsoft.com/blog/microsoft-security-blog/managing-embedded-devices-with-write-filters-in-configuration-manager-service-pa/247561/).
-
-To identify which case applies:
-
-- Restart only the game after saving. If it already resets, check the selected scene, launch account/path, and the log's `ScreenResize` load/save entries.
-- If a game restart retains settings but a Windows reboot restores or removes the JSON file, check the cabinet's write-filter configuration and startup scripts.
-- Store settings in a location verified to survive reboot, for example by adding `-configdir "E:\spice-config"` to the launch command. The calibration file is `spicetools_screen_resize.json` in that directory. Create/use your own persistent directory; `E:` is only an example and is not necessarily unprotected. Save again, then verify a reboot.
-
-The application does not change EWF/FBWF settings. A successful save means the OS accepted the file write; it cannot guarantee that a write filter or startup script will retain it after reboot.
-
-## API
-
-The fork adds `resize.image_resize_get`, `resize.image_resize_set`, and `resize.image_resize_save`; see the [API reference](../src/spice2x/README.md#resize). The save API preserves existing window settings. Scene persistence and validation are shared code on all Windows builds; the WGL hook and XP power flags remain guarded by `SPICE_XP`.
-
-## OpenGL latency
-
-The XP OpenGL transform runs immediately before the existing buffer swap. It does not queue or deliberately delay a frame. Active scaling currently copies the framebuffer into a GPU texture, redraws it in a separate WGL context, and uses two `glFinish()` synchronization points to preserve ordering across contexts. These waits serialize work and can increase frame time; missing a refresh deadline can add a refresh interval of display latency. They may also reduce existing GPU queue depth, so CPU wait time is not a direct measurement of input-to-display latency.
-
-An identity scene (100% on both axes, zero offsets, no duplication) now bypasses the extra copy, draw, context switches and GPU waits. Filtering and aspect-lock flags alone do not prevent this bypass. Active transforms cache context-constant texture/buffer capabilities and avoid reapplying unchanged texture parameters. They retain the tested synchronization and compatibility path. A same-context pass could avoid cross-context waits, but requires preserving the game's shader/FBO/texture/fixed-function state and validating the legacy ATI driver. Simply removing `glFinish()` or replacing it with `glFlush()` is not a proven-safe latency fix. No millisecond or zero-latency claim is made without cabinet measurements.
+[Resize API reference](../src/spice2x/README.md#resize)
