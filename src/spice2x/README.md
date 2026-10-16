@@ -192,6 +192,9 @@ the single digit numbers, "A" for the double zero and "D" for the decimal key.
   - returns all pressed keys of the specified keypad
 
 #### Analogs/Buttons/Lights
+
+This fork adds `buttons.pulse(name, duration_ms=180)` with a duration of 1–2000 ms. It presses and releases one button within a single server request, including when the client disconnects. A button with an existing override is rejected.
+
 All of those three modules have equally named methods for you to call.
 - read()
   - returns an array of state objects containing name, state and a bool

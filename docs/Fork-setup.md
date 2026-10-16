@@ -17,6 +17,8 @@ Profiles and cards stay in the current browser. Passwords are only stored when R
 
 Prefer a current Chrome or Edge with local-network permission for an HTTPS page connecting to a private-IP `ws://` endpoint. Where the browser requires TLS, supply a valid `wss://` gateway; spice2x's native WebSocket endpoint does not provide TLS. See [Chrome's local-network guidance](https://developer.chrome.com/blog/local-network-access).
 
+Service/Test pulses require this fork's `buttons.pulse` API. The cabinet releases the button after 180 ms even if the browser disconnects; older builds report an unsupported function rather than falling back to a persistent button write.
+
 ## Image calibration
 
 The transform changes the game image, not the Windows window size or output resolution. It supports 60–250% scaling, pixel offsets, aspect lock, linear filtering, and left/right duplication. Editing or selecting a scene in the Web controller enables resizing; explicitly disabling it can also be saved.
