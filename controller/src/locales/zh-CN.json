@@ -192,5 +192,15 @@
   "error.extra": "API 响应包含额外数据，已关闭连接。",
   "error.response": "API 响应格式或请求编号不符。",
   "error.key": "API 未提供有效的会话密钥。",
-  "msg.savedStatus": "{summary} {state}"
+  "msg.savedStatus": "{summary} {state}",
+  "log.title": "机台日志",
+  "log.hint": "显示最新 64 KiB。下载会获取请求开始时的完整日志。需要 API 密码。",
+  "log.refresh": "刷新日志",
+  "log.download": "下载日志",
+  "log.size": "{n} 字节",
+  "log.search": "筛选日志行",
+  "log.empty": "尚未加载日志。",
+  "error.logFormat": "日志响应格式无效。",
+  "error.logChanged": "下载期间日志已变更，请刷新后重试。",
+  "error.logPassword": "请使用 API 密码连接以读取日志。"
 }

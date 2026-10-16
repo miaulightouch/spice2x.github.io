@@ -11,7 +11,17 @@ import type { Profile } from './storage';
 
 const c = useController();
 const { status, demo, connected, busy, error, message, game, version, latency, resize, resizeError,
-  currentScene, applying, unsaved, image, imageTime, capturing, configuredPassword, coinQueue } = c;
+  currentScene, applying, unsaved, image, imageTime, capturing, configuredPassword, coinQueue, logText, logSize } = c;
+const logSearch = ref('');
+const filteredLog = computed(() => logSearch.value ? logText.value.split('\n').filter(line => line.toLowerCase().includes(logSearch.value.toLowerCase())).join('\n') : logText.value);
+async function downloadLog(): Promise<void> {
+  const file = await c.downloadLog();
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  const link = document.createElement('a'); link.href = url; link.download = 'log.txt';
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 const profiles = ref(loadProfiles());
 const selectedId = ref(profiles.value[0]!.id);
 const selected = computed(() => profiles.value.find(p => p.id === selectedId.value)!);
@@ -209,6 +219,17 @@ onBeforeUnmount(() => {
         <div class="connection-layout"><form class="settings-panel" @submit.prevent="connect"><fieldset :disabled="!!busy || status === 'connecting'"><label class="stacked-field">{{ t('connection.name') }}<input v-model="draft.name" maxlength="60" required autocomplete="off"></label><label class="stacked-field">{{ t('connection.endpoint') }}<input v-model="draft.endpoint" placeholder="ws://192.168.1.10:1338" type="url" required spellcheck="false" autocomplete="off" autocapitalize="none"></label><p class="muted small">{{ t('connection.portHint') }}</p><label class="stacked-field">{{ t('connection.password') }}<input v-model="draft.password" type="password" autocomplete="off" :placeholder="t('connection.passwordPlaceholder')"></label><label class="check"><input v-model="draft.rememberPassword" type="checkbox">{{ t('connection.remember') }}</label><p class="muted small" v-if="draft.rememberPassword">{{ t('connection.rememberHint') }}</p><div class="panel-actions"><button type="button" @click="saveProfile">{{ t('connection.save') }}</button><button class="primary" type="submit">{{ t(status === 'connecting' ? 'status.connecting' : 'connection.connect') }}</button></div></fieldset></form>
           <aside class="connection-help"><details open><summary>{{ t('connection.first') }}</summary><ol><li>{{ t('connection.help1') }}</li><li>{{ t('connection.help2') }}</li><li>{{ t('connection.help3') }}</li></ol><p>{{ t('connection.browserHint') }}</p><p class="small muted">{{ t('connection.directHint') }}</p></details><button :disabled="!!busy || status === 'connecting'" @click="c.startDemo(); tab = 'screen'; showGrid = true">{{ t('screen.tryDemo') }}</button></aside>
         </div>
+      </section>
+      <section v-show="tab === 'system'" class="log-panel" aria-labelledby="log-title">
+        <h2 id="log-title">{{ t('log.title') }}</h2>
+        <p class="small muted">{{ t('log.hint') }}</p>
+        <div class="button-row">
+          <button :disabled="!connected || !!busy" @click="c.readLog()">{{ t('log.refresh') }}</button>
+          <button :disabled="!connected || !!busy" @click="downloadLog()">{{ t('log.download') }}</button>
+          <span class="small muted">{{ t('log.size', { n: logSize }) }}</span>
+        </div>
+        <label class="stacked-field">{{ t('log.search') }}<input v-model="logSearch" type="search"></label>
+        <pre tabindex="0" :aria-label="t('log.title')">{{ filteredLog || t('log.empty') }}</pre>
       </section>
     </main>
     <footer class="app-footer"><div class="feedback" :class="{ 'has-error': !!error }" :role="error ? 'alert' : 'status'" aria-live="polite">{{ error || message }}</div><div class="footer-meta" v-if="connected && !demo"><span>{{ [game, version].filter(Boolean).join(' · ') || selected.name }}</span><span v-if="latency">{{ latency }} ms</span></div><div class="footer-meta" v-else><span>Arcade Room</span><span>SpiceAPI · WebSocket</span></div></footer>
