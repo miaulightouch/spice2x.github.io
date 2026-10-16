@@ -33,12 +33,25 @@ Settings can be read and written anywhere the Windows account has permission:
 | --- | --- |
 | `-configdir "%APPDATA%\spice"` | Main `spicetools.xml` and helper settings in that directory |
 | `-configdir "E:\spice-config"` | The same files in any chosen directory |
-| `-portable` | The same files beside the running EXE, even when the working directory is elsewhere |
+| `-portable` | Replace the AppData root with the EXE directory, preserving the upstream layout |
 | `-cfgpath "%APPDATA%\spice\custom.xml"` | Override just the main XML file |
 
 `-configdir` and `-portable` are command-line options, resolved before the main XML is read. Use the same option when launching the configurator separately. Per-file overrides take precedence over `-configdir`, which takes precedence over `-portable`. The shared root covers main XML, resize, patch manager, card manager, controller presets and camera settings. Calibration always uses `spicetools_screen_resize.json` within that root. It does not redirect game NVRAM/data or logs.
 
-Environment variables are expanded by the program, including paths entered without a CMD wrapper. Missing variables retain Windows' normal unexpanded spelling. Relative directory/file overrides keep working-directory semantics; `-portable` always uses the EXE directory. Required directories are created when possible. An explicit root reads and writes only there; it does not silently import or fall back to old AppData files. To retain existing settings, copy `%APPDATA%\spicetools.xml` and the files inside `%APPDATA%\spice2x\` directly into the chosen directory before switching.
+Environment variables are expanded by the program, including paths entered without a CMD wrapper. Missing variables retain Windows' normal unexpanded spelling. Relative directory/file overrides keep working-directory semantics; `-portable` always uses the EXE directory. Required directories are created when possible. These modes do not read from the original AppData directory or migrate files automatically. For `-configdir`, copy the main XML and helper files directly into the chosen directory. For `-portable`, preserve their paths relative to AppData:
+
+```text
+EXE directory/
+├── spicetools.xml
+└── spice2x/
+    ├── spicetools_screen_resize.json
+    ├── spicetools_patch_manager.json
+    ├── spicetools_card_manager.json
+    ├── spicetools_presets.xml
+    └── spicetools_camera_control.json
+```
+
+Existing helper files at the portable root remain supported; files under `spice2x/` take priority, matching upstream lookup.
 
 Without these new options, upstream AppData and legacy lookup behavior is unchanged. A portable directory on a write-protected or write-filtered volume still needs an appropriate persistent location.
 

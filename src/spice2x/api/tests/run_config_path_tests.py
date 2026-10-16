@@ -9,6 +9,15 @@ ROOT = Path(__file__).resolve().parents[2]
 source = (ROOT / 'util/fileutils.cpp').read_text()
 start = source.index('// Config path helpers.')
 end = source.index('\nbool fileutils::write_config_file', start)
+config = (ROOT / 'cfg/config.cpp').read_text()
+config_start = config.index('    if (CONFIG_PATH_OVERRIDE.length() > 0) {')
+config_end = config.index('\n    const auto parent =', config_start)
+CONFIG_ROUTING = (
+    '\nstd::string CONFIG_PATH_OVERRIDE;\n'
+    'struct ConfigRouting {\n'
+    '    std::filesystem::path configLocation;\n'
+    '    ConfigRouting() {\n' + config[config_start:config_end] + '\n    }\n};\n'
+)
 ADAPTER = r'''
 #include <algorithm>
 #include <cassert>
@@ -92,6 +101,7 @@ int main() {
 
     set_config_directory("", false); assert(!CONFIG_DIRECTORY);
     const auto appdata = fs::path(environment[L"APPDATA"]);
+    assert(ConfigRouting().configLocation == appdata / "spicetools.xml");
     fs::create_directories(appdata / "spice2x");
     std::ofstream(appdata / "legacy.json") << "legacy";
     bool exists = false;
@@ -102,6 +112,7 @@ int main() {
 
     set_config_directory("%APPDATA%/spice", false);
     assert(*CONFIG_DIRECTORY == appdata / "spice");
+    assert(ConfigRouting().configLocation == appdata / "spice/spicetools.xml");
     // An explicit root never silently reads a different legacy directory.
     assert(get_config_file_path("test", "legacy.json", &exists) == appdata / "spice/legacy.json" && !exists);
     for (const auto *name : {"spicetools.xml", "spicetools_screen_resize.json", "spicetools_patch_manager.json",
@@ -113,8 +124,35 @@ int main() {
     }
     CONFIG_DIRECTORY.reset();
     set_config_directory("", true); assert(*CONFIG_DIRECTORY == base / "bin");
-    assert(get_config_file_path("test", "spicetools.xml") == base / "bin/spicetools.xml");
+    const auto portable_root = base / "bin";
+    assert(ConfigRouting().configLocation == portable_root / "spicetools.xml");
+    assert(get_config_file_path("test", "new.json", &exists) == portable_root / "spice2x/new.json" && !exists);
+    std::ofstream(appdata / "spice2x/appdata-only.json") << "global settings";
+    assert(get_config_file_path("test", "appdata-only.json", &exists) == portable_root / "spice2x/appdata-only.json" && !exists);
+    std::ofstream(portable_root / "legacy.json") << "portable legacy";
+    assert(get_config_file_path("test", "legacy.json", &exists) == portable_root / "legacy.json" && exists);
+    fs::create_directories(portable_root / "spice2x");
+    std::ofstream(portable_root / "spice2x/legacy.json") << "portable preferred";
+    assert(get_config_file_path("test", "legacy.json") == portable_root / "spice2x/legacy.json");
+    for (const auto *name : {"spicetools_screen_resize.json", "spicetools_patch_manager.json",
+            "spicetools_card_manager.json", "spicetools_presets.xml", "spicetools_camera_control.json"}) {
+        const auto path = get_config_file_path("test", name, &exists);
+        assert(path == portable_root / "spice2x" / name && !exists);
+        std::ofstream(path) << "portable round trip";
+        assert(get_config_file_path("test", name, &exists) == path && exists);
+        std::ifstream stream(path); std::string value; std::getline(stream, value);
+        assert(value == "portable round trip");
+    }
+    fs::current_path(appdata);
+    assert(ConfigRouting().configLocation == portable_root / "spicetools.xml");
+    assert(get_config_file_path("test", "new.json") == portable_root / "spice2x/new.json");
+    fs::current_path(base);
+    CONFIG_PATH_OVERRIDE = "%APPDATA%/custom.xml";
+    assert(ConfigRouting().configLocation == appdata / "custom.xml");
+    CONFIG_PATH_OVERRIDE.clear();
     set_config_directory((base / "chosen").string(), true); assert(*CONFIG_DIRECTORY == base / "chosen");
+    assert(ConfigRouting().configLocation == base / "chosen/spicetools.xml");
+    assert(get_config_file_path("test", "new.json") == base / "chosen/new.json");
     CONFIG_DIRECTORY.reset();
     set_config_directory("relative-root", false); assert(*CONFIG_DIRECTORY == base / "relative-root");
     fs::current_path(base / "bin"); assert(get_config_file_path("test", "x.json") == base / "relative-root/x.json");
@@ -131,13 +169,13 @@ int main() {
     try { set_config_directory((base / "not-a-directory").string(), false); } catch (const std::runtime_error &) { threw = true; }
     assert(threw);
     std::cout << "Config path tests passed: environment expansion/retry/failure, legacy precedence, "
-        "shared XML/JSON roots, read/write round trips, portable/explicit priority, CWD changes and XP truncation.\n";
+        "shared XML/JSON roots, portable upstream layout, read/write round trips, overrides, CWD changes and XP truncation.\n";
 }
 '''
 with tempfile.TemporaryDirectory(prefix='spice-config-paths-') as directory:
     temp = Path(directory)
     cpp = temp / 'paths.cpp'
-    cpp.write_text(ADAPTER + source[start:end] + TEST)
+    cpp.write_text(ADAPTER + source[start:end] + CONFIG_ROUTING + TEST)
     exe = temp / 'paths'
     subprocess.run([os.getenv('CXX', 'g++'), '-std=c++20', '-Wall', '-Wextra', '-Werror',
                     '-Wno-unused-parameter', str(cpp), '-o', str(exe)], check=True)
