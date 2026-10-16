@@ -1,0 +1,73 @@
+name: Fork validation and Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regressions:
+    name: Fork regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Install software OpenGL test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-numpy libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri
+      - name: Verify fork regressions and release packaging
+        run: |
+          python3 scripts/fork_version.py
+          python3 -m unittest discover -s scripts/tests
+          python3 src/spice2x/api/tests/run_resize_tests.py
+          python3 src/spice2x/api/tests/run_control_tests.py
+          python3 src/spice2x/api/tests/run_config_path_tests.py
+          python3 src/spice2x/hooks/graphics/backends/opengl/tests/run_render_tests.py
+
+  controller:
+    name: Controller
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: controller
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: controller/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: controller/dist
+
+  deploy:
+    name: Deploy Pages
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [regressions, controller]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - name: Deploy controller
+        id: deployment
+        uses: actions/deploy-pages@v4

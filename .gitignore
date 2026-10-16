@@ -11,3 +11,8 @@ cmake-build*
 # user config
 build_all.local.sh
 build_docker.local.sh
+
+# Fork build output and private runtime/verification records
+/build/
+/local/
+__pycache__/
