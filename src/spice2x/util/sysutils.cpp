@@ -5,6 +5,8 @@
 
 #include <cstdlib>
 #include <mutex>
+#include <set>
+#include <tuple>
 
 #define WIN32_NO_STATUS
 #include <windows.h>
@@ -256,6 +258,46 @@ namespace sysutils {
         FLAGS_END(flags);
     }
 
+    // display mode helper begin
+    static void print_display_modes(DWORD index, const char *display_name) {
+        std::set<std::tuple<DWORD, DWORD, DWORD, DWORD, DWORD>> modes;
+        for (DWORD mode_index = 0;; mode_index++) {
+            DEVMODEA devmode = {};
+            devmode.dmSize = sizeof(devmode);
+            if (!EnumDisplaySettingsA(display_name, mode_index, &devmode)) {
+                break;
+            }
+
+            const auto mode = std::make_tuple(
+                devmode.dmPelsWidth,
+                devmode.dmPelsHeight,
+                devmode.dmDisplayFrequency,
+                devmode.dmBitsPerPel,
+                devmode.dmDisplayFlags);
+            if (!modes.insert(mode).second) {
+                continue;
+            }
+
+            log_misc(
+                "gpuinfo",
+                "device {} mode {} : {}px * {}px @ {}Hz, {}bpp, fields={:#x}, flags={:#x}, interlaced={}",
+                index,
+                modes.size() - 1,
+                devmode.dmPelsWidth,
+                devmode.dmPelsHeight,
+                devmode.dmDisplayFrequency,
+                devmode.dmBitsPerPel,
+                devmode.dmFields,
+                devmode.dmDisplayFlags,
+                (devmode.dmDisplayFlags & DM_INTERLACED) != 0);
+        }
+
+        if (modes.empty()) {
+            log_misc("gpuinfo", "device {} modes      : none ({})", index, display_name);
+        }
+    }
+    // display mode helper end
+
     static void print_adapter(DWORD index, PDISPLAY_DEVICEA adapter, bool is_monitor) {
         if (!is_monitor) {
             log_misc("gpuinfo", "-------- device {} --------", index);
@@ -295,6 +337,10 @@ namespace sysutils {
             
             log_misc("gpuinfo", "{} {} flags      : {}",
                 prefix.c_str(), index, device_flags_to_string(adapter->StateFlags));
+
+            if (adapter->StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) {
+                print_display_modes(index, adapter->DeviceName);
+            }
 
         } else {
             log_misc("gpuinfo", "{} {} name  : {} ({})",

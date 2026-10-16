@@ -21,6 +21,8 @@ Prefer a current Chrome or Edge with local-network permission for an HTTPS page 
 
 In **System**, use **Refresh log** to view the latest 64 KiB, filter lines, or **Download log** to retrieve the complete log as it existed when the request began. Log access requires an API password and reads only the active log of this process. Log text is displayed locally and is not sent to another service.
 
+Startup GPU information lists each attached display's available resolutions, refresh rates, color depths and interlace flags. It reports driver-provided modes without changing the display configuration; the existing system-information skip option also skips this listing.
+
 Service/Test pulses require this fork's `buttons.pulse` API. The cabinet releases the button after 180 ms even if the browser disconnects; older builds report an unsupported function rather than falling back to a persistent button write.
 
 ## Image calibration

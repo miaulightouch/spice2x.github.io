@@ -7,7 +7,7 @@ Remote calibration and cabinet controls for [spice2x](https://github.com/spice2x
 - **Resize API:** Read and edit four image-transform scenes; save their settings and the selected scene for the next launch.
 - **XP OpenGL calibration:** Scaling, offsets, filtering, and duplication for jubeat's legacy OpenGL path, compiled and initialized only with `SPICE_XP`.
 - **Power control fixes:** XP-compatible power-off flags and Windows error reporting; other Windows builds keep their existing shutdown flags.
-- **Diagnostics:** Read and download the active cabinet log from the Web controller.
+- **Diagnostics:** Read and download the active cabinet log from the Web controller; startup logs list available display modes.
 
 Open the [Web controller](https://miaulightouch.github.io/spice2x.github.io/) and see [fork setup and usage](docs/Fork-setup.md). Download binaries from this fork's [releases](https://github.com/miaulightouch/spice2x.github.io/releases).
 
