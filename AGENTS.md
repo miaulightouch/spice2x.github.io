@@ -13,7 +13,7 @@
 - Preserve existing GHA workflows. Before changing one, present the reason and exact diff and obtain explicit user authorization. Do not introduce a replacement release workflow.
 - Deploy Pages through GHA from controller source on `main`; do not commit generated assets.
 - Keep fork operation rules only in `AGENTS.md`. Keep `CONTRIBUTING.md` identical to upstream. Public docs cover implemented features, usage and limitations; omit work history and build/test records.
-- Use Git tags as release versions: `<upstream YY-MM-DD>-<fork revision>`, starting at `1` for each upstream release. Release the exact tested commit on `main`; preserve existing tags and assets.
+- Use upstream CI/release scripts and naming; do not add a separate version file or packager. Build task branches from a clean detached checkout when needed. Verify release artifacts match the tested `main` commit; preserve existing tags and assets.
 - Put build/test output in ignored `build/` or component output directories; keep private runtime state, diagnostics and review records in ignored `local/`.
 - Run affected tests and upstream builds. For controller changes, run `npm ci`, `npm test` and `npm run build` in `controller/` with Node.js 22.12+.
 - Preserve API, command-line and config compatibility. Guard XP-only behavior with `SPICE_XP`; distinguish automated checks from real cabinet/driver/input verification.

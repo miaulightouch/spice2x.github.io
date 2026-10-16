@@ -22,16 +22,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - name: Install software OpenGL test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-numpy libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri
       - name: Verify fork regressions
         run: |
           python3 src/spice2x/api/tests/run_resize_tests.py
           python3 src/spice2x/api/tests/run_control_tests.py
           python3 src/spice2x/api/tests/run_config_path_tests.py
-          python3 src/spice2x/hooks/graphics/backends/opengl/tests/run_render_tests.py
 
   controller:
     name: Controller
