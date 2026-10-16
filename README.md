@@ -8,10 +8,6 @@ Remote calibration and cabinet controls for [spice2x](https://github.com/spice2x
 - **XP OpenGL calibration:** Scaling, offsets, filtering, and duplication for jubeat's legacy OpenGL path, compiled and initialized only with `SPICE_XP`.
 - **Power control fixes:** XP-compatible power-off flags and Windows error reporting; other Windows builds keep their existing shutdown flags.
 
-Open the [Web controller](https://miaulightouch.github.io/spice2x.github.io/) and see [fork setup and usage](docs/Fork-setup.md). Download binaries from this fork's [releases](https://github.com/miaulightouch/spice2x.github.io/releases), named `<upstream version>-<build number>`.
+Open the [Web controller](https://miaulightouch.github.io/spice2x.github.io/) and see [fork setup and usage](docs/Fork-setup.md). Download binaries from this fork's [releases](https://github.com/miaulightouch/spice2x.github.io/releases).
 
 For supported games, general setup, and building, see the [upstream documentation](https://github.com/spice2x/spice2x.github.io/wiki). This README documents additions made by this fork.
-
-Native and Web controller source live together on `main`. Changes use task
-branches and pull requests; CI checks both components, and GitHub Actions deploys
-Pages. See the [fork development and release workflow](docs/Fork-workflow.md).
