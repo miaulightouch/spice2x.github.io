@@ -15,5 +15,6 @@ namespace api::modules {
         void avs(Request &req, Response &res);
         void launcher(Request &req, Response &res);
         void memory(Request &req, Response &res);
+        void log(Request &req, Response &res);
     };
 }

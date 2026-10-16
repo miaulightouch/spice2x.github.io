@@ -1,12 +1,16 @@
 #include "info.h"
 #include <functional>
 #include <iomanip>
+#include <algorithm>
+#include <vector>
 #include "external/rapidjson/document.h"
 #include "avs/game.h"
 #include "avs/ea3.h"
 #include "util/logging.h"
 #include "util/utils.h"
 #include "util/memutils.h"
+#include "util/crypt.h"
+#include "util/scope_guard.h"
 #include "build/defs.h"
 
 using namespace std::placeholders;
@@ -19,6 +23,45 @@ namespace api::modules {
         functions["avs"] = std::bind(&Info::avs, this, _1, _2);
         functions["launcher"] = std::bind(&Info::launcher, this, _1, _2);
         functions["memory"] = std::bind(&Info::memory, this, _1, _2);
+        functions["log"] = std::bind(&Info::log, this, _1, _2);
+        require_password("log");
+    }
+
+    // Read only this process's active log; callers cannot supply a file path.
+    void Info::log(Request &req, Response &res) {
+        const auto params = req.params.GetArray();
+        if (params.Size() > 2 || (params.Size() > 0 && !params[0].IsNull() && !params[0].IsUint64()) ||
+                (params.Size() > 1 && (!params[1].IsUint() || params[1].GetUint() == 0 || params[1].GetUint() > 262144))) {
+            return error(res, "expected [offset=null or unsigned byte offset, limit=1..262144]");
+        }
+        if (LOG_FILE_PATH.empty()) return error(res, "No active log file is available.");
+        HANDLE handle = CreateFileA(LOG_FILE_PATH.c_str(), GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) return error(res, "Unable to open the active log file.");
+        const auto file = scope_guard{[handle] { CloseHandle(handle); }};
+        LARGE_INTEGER length{};
+        if (!GetFileSizeEx(handle, &length) || length.QuadPart < 0) return error(res, "Unable to read log size.");
+        const auto size = static_cast<uint64_t>(length.QuadPart);
+        const DWORD limit = params.Size() > 1 ? params[1].GetUint() : 65536;
+        const uint64_t offset = params.Size() > 0 && !params[0].IsNull() ? params[0].GetUint64() :
+                (size > limit ? size - limit : 0);
+        if (offset > size) return error(res, "Log size changed; read it again.");
+        LARGE_INTEGER position{};
+        position.QuadPart = static_cast<LONGLONG>(offset);
+        if (!SetFilePointerEx(handle, position, nullptr, FILE_BEGIN)) return error(res, "Unable to seek the log file.");
+        std::vector<uint8_t> bytes(static_cast<size_t>(std::min<uint64_t>(limit, size - offset)));
+        DWORD count = 0;
+        if (!bytes.empty() && !ReadFile(handle, bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr)) {
+            return error(res, "Unable to read the log file.");
+        }
+        const auto encoded = crypt::base64_encode(bytes.data(), count);
+        auto &alloc = res.doc()->GetAllocator();
+        Value data(kObjectType);
+        data.AddMember("offset", offset, alloc);
+        data.AddMember("next", offset + count, alloc);
+        data.AddMember("size", size, alloc);
+        data.AddMember("data", Value(encoded.c_str(), static_cast<SizeType>(encoded.size()), alloc), alloc);
+        res.add_data(data);
     }
 
     /**

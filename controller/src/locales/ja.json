@@ -192,5 +192,15 @@
   "error.extra": "API 応答に余分なデータがあるため切断しました。",
   "error.response": "API 応答の形式または要求 ID が一致しません。",
   "error.key": "API が有効なセッションキーを返しませんでした。",
-  "msg.savedStatus": "{summary} {state}"
+  "msg.savedStatus": "{summary} {state}",
+  "log.title": "筐体ログ",
+  "log.hint": "最新の 64 KiB を表示します。ダウンロードはリクエスト開始時のログ全体を取得します。API パスワードが必要です。",
+  "log.refresh": "ログを更新",
+  "log.download": "ログをダウンロード",
+  "log.size": "{n} バイト",
+  "log.search": "行を絞り込む",
+  "log.empty": "ログは読み込まれていません。",
+  "error.logFormat": "ログの応答形式が無効です。",
+  "error.logChanged": "ダウンロード中にログが変更されました。更新して再試行してください。",
+  "error.logPassword": "ログを読むには API パスワードを指定して接続してください。"
 }

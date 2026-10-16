@@ -42,6 +42,11 @@ export class DemoApi implements Rpc {
       if (fn === 'insert') this.coinQueue += Number(params[0] ?? 1);
       return fn === 'get' ? [this.coinQueue] : [];
     }
+    if (module === 'info' && fn === 'log') {
+      const text = 'DEMO: offline log viewer\nDEMO: no cabinet connection\n';
+      const offset = Number(params[0] ?? 0), next = Math.min(text.length, offset + Number(params[1] ?? 65536));
+      return [{ offset, next, size: text.length, data: btoa(text.slice(offset, next)) }];
+    }
     if (module === 'info') return [fn === 'avs' ? { model: 'DEMO', dest: 'J', spec: 'A' } : { version: t('status.demo') }];
     if (module === 'card' && fn === 'get_cards') return [];
     if (module === 'capture') throw new LocalizedError('error.demoCapture');
