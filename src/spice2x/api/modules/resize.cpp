@@ -41,7 +41,11 @@ namespace api::modules {
         }
 
         std::lock_guard<std::mutex> lock(cfg::SCREENRESIZE->image_mutex);
-        cfg::SCREENRESIZE->enable_screen_resize = req.params[0].GetBool();
+        const bool enabled = req.params[0].GetBool();
+        if (!cfg::SCREENRESIZE->enable_screen_resize && enabled) {
+            cfg::SCREENRESIZE->need_surface_clean = true;
+        }
+        cfg::SCREENRESIZE->enable_screen_resize = enabled;
     }
 
     /**
@@ -66,6 +70,11 @@ namespace api::modules {
         if (scene == 0) {
             cfg::SCREENRESIZE->enable_screen_resize = false;
         } else {
+            const bool scene_changed = cfg::SCREENRESIZE->screen_resize_current_scene != scene - 1;
+            const bool was_disabled = !cfg::SCREENRESIZE->enable_screen_resize;
+            if (scene_changed || was_disabled) {
+                cfg::SCREENRESIZE->need_surface_clean = true;
+            }
             cfg::SCREENRESIZE->enable_screen_resize = true;
             cfg::SCREENRESIZE->screen_resize_current_scene = scene - 1;
         }
@@ -121,6 +130,9 @@ namespace api::modules {
         auto &resize = *cfg::SCREENRESIZE;
         const auto &settings = req.params[0];
         int32_t scene_index = resize.screen_resize_current_scene;
+        const auto old_scene_index = scene_index;
+        const bool old_enabled = resize.enable_screen_resize;
+        const auto old_duplicate = resize.scene_settings[scene_index].duplicate;
         if (settings.HasMember("scene")) {
             if (!settings["scene"].IsInt()) {
                 return error_type(res, "scene", "int");
@@ -199,11 +211,15 @@ namespace api::modules {
             }
         }
 
+        const bool needs_surface_clean = scene_index != old_scene_index ||
+            scene.duplicate != old_duplicate || (!old_enabled && enabled);
         resize.scene_settings[scene_index] = scene;
         resize.screen_resize_current_scene = static_cast<int8_t>(scene_index);
         resize.enable_screen_resize = enabled;
         resize.enable_linear_filter = linear_filter;
-        resize.need_surface_clean = true;
+        if (needs_surface_clean) {
+            resize.need_surface_clean = true;
+        }
         add_image_resize_state(res);
     }
 

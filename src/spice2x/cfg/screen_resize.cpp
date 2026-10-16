@@ -115,6 +115,9 @@ namespace cfg {
         load_uint32_value(doc, root + "w_height", this->client_height);
         load_int_value(doc, root + "w_offset_x", this->window_offset_x);
         load_int_value(doc, root + "w_offset_y", this->window_offset_y);
+        if (this->enable_screen_resize) {
+            this->need_surface_clean = true;
+        }
     }
 
     bool ScreenResize::load_bool_value(rapidjson::Document& doc, std::string path, bool& value) {
