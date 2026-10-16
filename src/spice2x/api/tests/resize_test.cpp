@@ -91,17 +91,55 @@ int main() {
     CHECK(cfg::SCREENRESIZE->need_surface_clean);
     CHECK(result["data"][0]["scenes"][0]["offset_x"].GetInt() == 0);
 
+    cfg::SCREENRESIZE->need_surface_clean = false;
+    result = call(module, "image_resize_set", R"([{}])");
+    CHECK(result["errors"].Empty());
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = true;
+    result = call(module, "image_resize_set", R"([{}])");
+    CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
     result = call(module, "image_resize_set", R"([{"offset_x":9}])");
     CHECK(result["errors"].Empty());
     CHECK(result["data"][0]["scenes"][1]["offset_x"].GetInt() == 9);
     CHECK(near(result["data"][0]["scenes"][1]["scale_y"].GetDouble(), 1.02));
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
+    result = call(module, "image_resize_set", R"([{"offset_x":9}])");
+    CHECK(result["errors"].Empty());
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
 
+    result = call(module, "image_resize_set", R"([{"linear_filter":true}])");
+    CHECK(result["errors"].Empty());
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
+    result = call(module, "image_resize_set", R"([{"linear_filter":false}])");
+    CHECK(result["errors"].Empty());
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
+    result = call(module, "image_resize_set", R"([{"duplicate":1}])");
+    CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
+    result = call(module, "image_resize_set", R"([{"duplicate":2}])");
+    CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
     result = call(module, "image_resize_set",
         R"([{"keep_aspect_ratio":true,"scale_x":1.2}])");
     CHECK(result["errors"].Empty());
     CHECK(near(result["data"][0]["scenes"][1]["scale_y"].GetDouble(), 1.2));
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
     result = call(module, "image_resize_set", R"([{"scale_y":1.3}])");
     CHECK(near(result["data"][0]["scenes"][1]["scale_x"].GetDouble(), 1.3));
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
+
+    result = call(module, "image_resize_set", R"([{"scene":3}])");
+    CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
+    result = call(module, "image_resize_set", R"([{"scene":2}])");
+    CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
 
     const auto before = state_json(module);
     const std::vector<std::string> invalid = {
@@ -134,13 +172,18 @@ int main() {
     result = call(module, "image_resize_set_scene", "[0]");
     CHECK(result["errors"].Empty() && result["data"].Empty());
     CHECK(!cfg::SCREENRESIZE->enable_screen_resize);
+    CHECK(!cfg::SCREENRESIZE->need_surface_clean);
     result = call(module, "image_resize_set", R"([{"scene":3,"offset_x":10}])");
     CHECK(!result["data"][0]["enabled"].GetBool());
     result = call(module, "image_resize_enable", "[true]");
     CHECK(result["errors"].Empty() && result["data"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
     CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 2);
     result = call(module, "image_resize_set_scene", "[4]");
     CHECK(result["errors"].Empty());
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
+    cfg::SCREENRESIZE->need_surface_clean = false;
     CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 3);
     for (const auto *params : {"[]", "[5]", "[-1]", "[false]"}) {
         CHECK(call(module, "image_resize_set_scene", params)["errors"].Size() == 1);
@@ -171,6 +214,7 @@ int main() {
 
     cfg::SCREENRESIZE = std::make_unique<cfg::ScreenResize>();
     CHECK(cfg::SCREENRESIZE->enable_screen_resize);
+    CHECK(cfg::SCREENRESIZE->need_surface_clean);
     CHECK(!cfg::SCREENRESIZE->enable_linear_filter);
     CHECK(cfg::SCREENRESIZE->screen_resize_current_scene == 3);
     CHECK(cfg::SCREENRESIZE->scene_settings[2].offset_x == 10);
