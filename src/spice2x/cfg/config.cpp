@@ -31,7 +31,7 @@ Config::Config() {
         this->configLocation = fileutils::expand_config_path(CONFIG_PATH_OVERRIDE);
         log_info("cfg", "using custom config file: {}", this->configLocation);
     } else if (fileutils::CONFIG_DIRECTORY) {
-        this->configLocation = fileutils::get_config_file_path("cfg", "spicetools.xml");
+        this->configLocation = *fileutils::CONFIG_DIRECTORY / "spicetools.xml";
     } else {
         this->configLocation = std::filesystem::path(_wgetenv(L"APPDATA")) / L"spicetools.xml";
         // avoids logging the expanded appdata path as it contains user name

@@ -251,6 +251,7 @@ std::vector<uint8_t> *fileutils::bin_read(const std::filesystem::path &path) {
 
 // Config path helpers. Kept together for the portable Win32-boundary regression test.
 std::optional<std::filesystem::path> fileutils::CONFIG_DIRECTORY;
+static bool portable_config_layout = false;
 
 std::filesystem::path fileutils::expand_config_path(const std::filesystem::path &path) {
     const auto input = path.wstring();
@@ -295,11 +296,12 @@ void fileutils::set_config_directory(const std::string &directory, bool portable
         return;
     }
     CONFIG_DIRECTORY = path;
+    portable_config_layout = directory.empty() && portable;
     log_info("cfg", "using config directory: {}", path);
 }
 
 std::filesystem::path fileutils::get_config_file_path(const std::string module, const std::string filename, bool* file_exists) {
-    if (CONFIG_DIRECTORY) {
+    if (CONFIG_DIRECTORY && !portable_config_layout) {
         const auto path = *CONFIG_DIRECTORY / filename;
         const bool exists = fileutils::file_exists(path);
         if (file_exists) *file_exists = exists;
@@ -307,9 +309,14 @@ std::filesystem::path fileutils::get_config_file_path(const std::string module, 
         return path;
     }
     // try %appdata%\spice2x path first, if it exists
-    const auto appdata_spice2x = std::filesystem::path(_wgetenv(L"APPDATA")) / "spice2x" / filename;
+    const auto appdata_root = CONFIG_DIRECTORY ? *CONFIG_DIRECTORY : std::filesystem::path(_wgetenv(L"APPDATA"));
+    const auto appdata_spice2x = appdata_root / "spice2x" / filename;
     if (fileutils::file_exists(appdata_spice2x)) {
-        log_info(module, "loading config from %appdata%\\spice2x\\{}", filename);
+        if (CONFIG_DIRECTORY) {
+            log_info(module, "loading config from: {}", appdata_spice2x);
+        } else {
+            log_info(module, "loading config from %appdata%\\spice2x\\{}", filename);
+        }
         if (file_exists) {
             *file_exists = true;
         }
@@ -317,9 +324,13 @@ std::filesystem::path fileutils::get_config_file_path(const std::string module, 
     }
 
     // fallback to older %appdata% path (older spice2x or mainline spicetools), if it exists
-    const auto appdata = std::filesystem::path(_wgetenv(L"APPDATA")) / filename;
+    const auto appdata = appdata_root / filename;
     if (fileutils::file_exists(appdata)) {
-        log_info(module, "loading config from %appdata%\\{}", filename);
+        if (CONFIG_DIRECTORY) {
+            log_info(module, "loading config from: {}", appdata);
+        } else {
+            log_info(module, "loading config from %appdata%\\{}", filename);
+        }
         if (file_exists) {
             *file_exists = true;
         }
