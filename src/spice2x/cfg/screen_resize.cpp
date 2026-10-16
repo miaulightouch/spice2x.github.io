@@ -28,7 +28,8 @@ namespace cfg {
     }
 
     void ScreenResize::config_load() {
-        std::lock_guard<std::mutex> lock(this->image_mutex);
+        std::lock_guard<std::mutex> config_lock(this->config_mutex);
+        std::lock_guard<std::mutex> image_lock(this->image_mutex);
         std::string config = fileutils::text_read(this->config_path);
         if (config.empty()) {
             log_info("ScreenResize", "config is empty");
@@ -184,7 +185,42 @@ namespace cfg {
     }
 
     bool ScreenResize::config_save(bool image_only) {
-        std::lock_guard<std::mutex> lock(this->image_mutex);
+        // Keep config I/O ordered while leaving the drawing lock free during save I/O.
+        std::lock_guard<std::mutex> config_lock(this->config_mutex);
+        bool enable_screen_resize;
+        bool enable_linear_filter;
+        int8_t screen_resize_current_scene;
+        fullscreen_setting scene_settings[4];
+        bool window_always_on_top;
+        bool enable_window_resize;
+        bool client_keep_aspect_ratio;
+        int window_decoration;
+        uint32_t client_width;
+        uint32_t client_height;
+        int32_t window_offset_x;
+        int32_t window_offset_y;
+        std::string game;
+        {
+            std::lock_guard<std::mutex> lock(this->image_mutex);
+            enable_screen_resize = this->enable_screen_resize;
+            enable_linear_filter = this->enable_linear_filter;
+            screen_resize_current_scene = this->screen_resize_current_scene;
+            for (size_t i = 0; i < std::size(scene_settings); ++i) {
+                scene_settings[i] = this->scene_settings[i];
+            }
+            if (!image_only) {
+                window_always_on_top = this->window_always_on_top;
+                enable_window_resize = this->enable_window_resize;
+                client_keep_aspect_ratio = this->client_keep_aspect_ratio;
+                window_decoration = this->window_decoration;
+                client_width = this->client_width;
+                client_height = this->client_height;
+                window_offset_x = this->window_offset_x;
+                window_offset_y = this->window_offset_y;
+            }
+            game = eamuse_get_game();
+        }
+
         rapidjson::Document doc;
         std::string config = fileutils::text_read(this->config_path);
         if (!config.empty()) {
@@ -197,21 +233,21 @@ namespace cfg {
         }
 
         // always save under per-game settings
-        std::string root("/sp2x_games/" + eamuse_get_game() + "/");
+        std::string root("/sp2x_games/" + game + "/");
 
         log_misc(
             "ScreenResize",
             "Game = {}, JSON path = {}",
-            eamuse_get_game(),
+            game,
             root);
 
         // full screen image settings
-        rapidjson::Pointer(root + "enable_screen_resize").Set(doc, this->enable_screen_resize);
-        rapidjson::Pointer(root + "enable_linear_filter").Set(doc, this->enable_linear_filter);
+        rapidjson::Pointer(root + "enable_screen_resize").Set(doc, enable_screen_resize);
+        rapidjson::Pointer(root + "enable_linear_filter").Set(doc, enable_linear_filter);
         rapidjson::Pointer(root + "screen_resize_current_scene").Set(
-            doc, static_cast<int>(this->screen_resize_current_scene));
-        for (size_t i = 0; i < std::size(this->scene_settings); i++) {
-            auto& scene = this->scene_settings[i];
+            doc, static_cast<int>(screen_resize_current_scene));
+        for (size_t i = 0; i < std::size(scene_settings); i++) {
+            auto& scene = scene_settings[i];
             const std::string prefix = fmt::format("scenes/{}/", i);
             rapidjson::Pointer(root + prefix + "offset_x").Set(doc, scene.offset_x);
             rapidjson::Pointer(root + prefix + "offset_y").Set(doc, scene.offset_y);
@@ -224,14 +260,14 @@ namespace cfg {
         // The API only saves image settings; preserve existing window settings on disk.
         if (!image_only) {
             // windowed mode settings
-            rapidjson::Pointer(root + "w_always_on_top").Set(doc, this->window_always_on_top);
-            rapidjson::Pointer(root + "w_enable_resize").Set(doc, this->enable_window_resize);
-            rapidjson::Pointer(root + "w_keep_aspect_ratio").Set(doc, this->client_keep_aspect_ratio);
-            rapidjson::Pointer(root + "w_border_type").Set(doc, this->window_decoration);
-            rapidjson::Pointer(root + "w_width").Set(doc, this->client_width);
-            rapidjson::Pointer(root + "w_height").Set(doc, this->client_height);
-            rapidjson::Pointer(root + "w_offset_x").Set(doc, this->window_offset_x);
-            rapidjson::Pointer(root + "w_offset_y").Set(doc, this->window_offset_y);
+            rapidjson::Pointer(root + "w_always_on_top").Set(doc, window_always_on_top);
+            rapidjson::Pointer(root + "w_enable_resize").Set(doc, enable_window_resize);
+            rapidjson::Pointer(root + "w_keep_aspect_ratio").Set(doc, client_keep_aspect_ratio);
+            rapidjson::Pointer(root + "w_border_type").Set(doc, window_decoration);
+            rapidjson::Pointer(root + "w_width").Set(doc, client_width);
+            rapidjson::Pointer(root + "w_height").Set(doc, client_height);
+            rapidjson::Pointer(root + "w_offset_x").Set(doc, window_offset_x);
+            rapidjson::Pointer(root + "w_offset_y").Set(doc, window_offset_y);
         }
 
         // build JSON
