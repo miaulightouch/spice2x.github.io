@@ -64,17 +64,32 @@ namespace graphics::opengl {
         // Match D3D9's source-pixel offsets. API Y is positive down; OpenGL Y is up.
         const float left = (width - w) * .5f + scene.offset_x * scene.scale_x;
         const float bottom = (height - h) * .5f - scene.offset_y * scene.scale_y;
-        // Texel centers keep linear sampling inside the current image when a larger texture is reused.
-        const float u0 = linear_filter ? .5f / tw : 0.f;
-        const float v0 = linear_filter ? .5f / th : 0.f;
-        const float u1 = linear_filter ? (width - .5f) / tw : static_cast<float>(width) / tw;
-        const float v1 = linear_filter ? (height - .5f) / th : static_cast<float>(height) / th;
+        const auto rectangle = [&](float x0, float y0, float x1, float y1,
+                float u0, float v0, float u1, float v1) {
+            gl.glTexCoord2f(u0, v0); gl.glVertex2f(x0, y0);
+            gl.glTexCoord2f(u1, v0); gl.glVertex2f(x1, y0);
+            gl.glTexCoord2f(u1, v1); gl.glVertex2f(x1, y1);
+            gl.glTexCoord2f(u0, v1); gl.glVertex2f(x0, y1);
+        };
         const auto quad = [&](float x) {
             gl.glBegin(GL_QUADS);
-            gl.glTexCoord2f(u0, v0); gl.glVertex2f(x, bottom);
-            gl.glTexCoord2f(u1, v0); gl.glVertex2f(x + w, bottom);
-            gl.glTexCoord2f(u1, v1); gl.glVertex2f(x + w, bottom + h);
-            gl.glTexCoord2f(u0, v1); gl.glVertex2f(x, bottom + h);
+            if (linear_filter) {
+                // Clamp only edge strips so interior pixels keep their original sampling alignment.
+                const float xs[]{x, x + scene.scale_x * .5f, x + w - scene.scale_x * .5f, x + w};
+                const float ys[]{bottom, bottom + scene.scale_y * .5f,
+                    bottom + h - scene.scale_y * .5f, bottom + h};
+                const float us[]{.5f / tw, .5f / tw, (width - .5f) / tw, (width - .5f) / tw};
+                const float vs[]{.5f / th, .5f / th, (height - .5f) / th, (height - .5f) / th};
+                for (int row = 0; row < 3; ++row) {
+                    for (int column = 0; column < 3; ++column) {
+                        rectangle(xs[column], ys[row], xs[column + 1], ys[row + 1],
+                            us[column], vs[row], us[column + 1], vs[row + 1]);
+                    }
+                }
+            } else {
+                rectangle(x, bottom, x + w, bottom + h,
+                    0.f, 0.f, static_cast<float>(width) / tw, static_cast<float>(height) / th);
+            }
             gl.glEnd();
         };
         quad(left);
