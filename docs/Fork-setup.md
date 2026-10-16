@@ -34,10 +34,9 @@ Settings can be read and written anywhere the Windows account has permission:
 | `-configdir "%APPDATA%\spice"` | Main `spicetools.xml` and helper settings in that directory |
 | `-configdir "E:\spice-config"` | The same files in any chosen directory |
 | `-portable` | The same files beside the running EXE, even when the working directory is elsewhere |
-| `-resizecfgpath "E:\profiles\screen.json"` | Override just the image-calibration file |
 | `-cfgpath "%APPDATA%\spice\custom.xml"` | Override just the main XML file |
 
-`-configdir` and `-portable` are command-line options, resolved before the main XML is read. Use the same option when launching the configurator separately. Per-file overrides take precedence over `-configdir`, which takes precedence over `-portable`. The shared root covers main XML, resize, patch manager, card manager, controller presets and camera settings. It does not redirect game NVRAM/data or logs.
+`-configdir` and `-portable` are command-line options, resolved before the main XML is read. Use the same option when launching the configurator separately. Per-file overrides take precedence over `-configdir`, which takes precedence over `-portable`. The shared root covers main XML, resize, patch manager, card manager, controller presets and camera settings. Calibration always uses `spicetools_screen_resize.json` within that root. It does not redirect game NVRAM/data or logs.
 
 Environment variables are expanded by the program, including paths entered without a CMD wrapper. Missing variables retain Windows' normal unexpanded spelling. Relative directory/file overrides keep working-directory semantics; `-portable` always uses the EXE directory. Required directories are created when possible. An explicit root reads and writes only there; it does not silently import or fall back to old AppData files. To retain existing settings, copy `%APPDATA%\spicetools.xml` and the files inside `%APPDATA%\spice2x\` directly into the chosen directory before switching.
 
@@ -55,7 +54,7 @@ To identify which case applies:
 
 - Restart only the game after saving. If it already resets, check the selected scene, launch account/path, and the log's `ScreenResize` load/save entries.
 - If a game restart retains settings but a Windows reboot restores or removes the JSON file, check the cabinet's write-filter configuration and startup scripts.
-- Store the resize file on a location verified to survive reboot. Add the existing path override to the same launch command, for example `-resizecfgpath "E:\spice-config\screen-resize.json"`. Create/use your own persistent directory; `E:` is only an example and is not necessarily unprotected. Save again, then verify a reboot.
+- Store settings in a location verified to survive reboot, for example by adding `-configdir "E:\spice-config"` to the launch command. The calibration file is `spicetools_screen_resize.json` in that directory. Create/use your own persistent directory; `E:` is only an example and is not necessarily unprotected. Save again, then verify a reboot.
 
 The application does not change EWF/FBWF settings. A successful save means the OS accepted the file write; it cannot guarantee that a write filter or startup script will retain it after reboot.
 
