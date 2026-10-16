@@ -16,7 +16,7 @@ export function loadProfiles(storage?: Pick<Storage, 'getItem'>): Profile[] {
     const raw: unknown = JSON.parse(target.getItem(PROFILE_KEY) ?? 'null');
     if (Array.isArray(raw)) {
       const profiles = raw.filter(isRecord).filter(v => typeof v.id === 'string' && typeof v.name === 'string' && typeof v.endpoint === 'string')
-        .slice(0, 30).map(v => ({ id: String(v.id), name: String(v.name), endpoint: String(v.endpoint),
+        .map(v => ({ id: String(v.id), name: String(v.name), endpoint: String(v.endpoint),
           password: v.rememberPassword === true && typeof v.password === 'string' ? v.password : '', rememberPassword: v.rememberPassword === true }));
       if (profiles.length && new Set(profiles.map(p => p.id)).size === profiles.length) return profiles;
     }
@@ -34,7 +34,7 @@ export function normalizeCard(value: string): string {
 export function loadCards(): SavedCard[] {
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(CARD_KEY) ?? '[]');
-    return Array.isArray(raw) ? raw.filter(isRecord).filter(v => typeof v.id === 'string' && typeof v.name === 'string' && typeof v.number === 'string' && /^[0-9A-F]{16}$/.test(v.number)).slice(0, 100) as unknown as SavedCard[] : [];
+    return Array.isArray(raw) ? raw.filter(isRecord).filter(v => typeof v.id === 'string' && typeof v.name === 'string' && typeof v.number === 'string' && /^[0-9A-F]{16}$/.test(v.number)) as unknown as SavedCard[] : [];
   } catch { return []; }
 }
 export function saveCards(cards: SavedCard[]): void { localStorage.setItem(CARD_KEY, JSON.stringify(cards)); }
