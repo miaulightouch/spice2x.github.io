@@ -159,10 +159,43 @@ bool draw(void *state, int width, int height, float x, float y, int ox, int oy, 
     assert render.draw(state,60,60,.6,.6,0,0,2,True)
     read(0,0,64,64,0x1908,0x1401,image.ctypes.data)
     assert np.all(image[30,55,:3] == 255), image[30,55,:3].tolist()
+    # Integer translations must preserve every source pixel with either filter.
+    for width,height in ((64,64),(60,60)):
+        for axis in (0,1):
+            for ox,oy in ((1,0),(-1,0),(0,1),(0,-1)):
+                for linear in (False,True):
+                    assert make_current(display,surface,surface,game)
+                    disable(0x0c11); clear_color(0,0,0,1); clear(0x4000)
+                    enable(0x0c11); clear_color(1,1,1,1)
+                    for line in range(0,64,2):
+                        scissor(line,0,1,64) if axis==0 else scissor(0,line,64,1)
+                        clear(0x4000)
+                    finish()
+                    assert make_current(display,surface,surface,own)
+                    assert render.draw(state,width,height,1,1,ox,oy,0,linear)
+                    x,y=np.meshgrid(np.arange(64),np.arange(64))
+                    tx,ty=x-ox,y+oy
+                    visible=(x<width)&(y<height)&(tx>=0)&(tx<width)&(ty>=0)&(ty<height)
+                    expected=visible&((tx if axis==0 else ty)%2==0)
+                    assert np.array_equal(pixels(),expected.astype(np.uint8)*255), (width,height,axis,ox,oy,linear)
+    # Magnified edges must repeat the current edge pixel, including at POT limits.
+    for width,height in ((64,64),(60,60)):
+        for sign in (-1,1):
+            assert make_current(display,surface,surface,game)
+            disable(0x0c11); clear_color(1,1,1,1); clear(0x4000); finish()
+            assert make_current(display,surface,surface,own)
+            assert render.draw(state,width,height,2,2,sign*width//4,-sign*height//4,0,True)
+            assert np.all(pixels()[:height,:width]==255)
+    for width,height in ((1,1),(1,3),(3,1)):
+        assert make_current(display,surface,surface,game)
+        disable(0x0c11); clear_color(1,1,1,1); clear(0x4000); finish()
+        assert make_current(display,surface,surface,own)
+        assert render.draw(state,width,height,2.5,2.5,0,0,0,True)
+        assert np.all(pixels()[:height,:width]==255)
     render.destroy(state)
     assert make_current(display,None,None,None)
     destroy_context=bind(egl,'eglDestroyContext',C.c_uint,[C.c_void_p,C.c_void_p])
     assert destroy_context(display,own) and destroy_context(display,game)
     assert bind(egl,'eglDestroySurface',C.c_uint,[C.c_void_p,C.c_void_p])(display,surface)
     assert bind(egl,'eglTerminate',C.c_uint,[C.c_void_p])(display)
-    print(f'OpenGL pixel tests passed: {checks} scale/offset/duplicate cases, preserved game viewport/error state, size limits and linear filtering.')
+    print(f'OpenGL pixel tests passed: {checks} transform cases, integer pixel alignment, clamped edges, texture reuse, size limits and preserved game state.')
