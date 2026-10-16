@@ -2,11 +2,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -180,12 +182,41 @@ class PackageReleaseTests(unittest.TestCase):
         sentinel = self.work / "sentinel"
         sentinel.write_text("keep", encoding="utf-8")
         (self.binaries / "FORK_VERSION").symlink_to(sentinel)
-        self._package()
+        with self.assertRaisesRegex(PackageError, "symlinks are not allowed"):
+            self._package()
         self.assertEqual(sentinel.read_text(), "keep")
         output_link = self.work / "output-link"
         output_link.symlink_to(self.work / "release", target_is_directory=True)
         with self.assertRaisesRegex(PackageError, "symlink"):
             package_release(self.repo, self.binaries, output_link)
+
+    def test_source_snapshot_stays_pinned_when_head_advances(self):
+        copytree = shutil.copytree
+
+        def advance_head(source, destination, *args, **kwargs):
+            result = copytree(source, destination, *args, **kwargs)
+            if Path(source) == self.binaries:
+                self._write("controller/app.js", "new source\n")
+                self._write("FORK_VERSION", "26-10-03-99\n")
+                self._write("LICENSE", "new license\n")
+                self._git("add", ".")
+                self._git("commit", "-qm", "concurrent update fixture")
+            return result
+
+        with patch("package_release.shutil.copytree", side_effect=advance_head):
+            output = self._package()
+        metadata = json.loads((output / "RELEASE.json").read_text())
+        self.assertNotEqual(self._git("rev-parse", "HEAD"), self.source_commit)
+        self.assertEqual(metadata["source_commit"], self.source_commit)
+        self.assertEqual(metadata["source_tree"], self.source_tree)
+        version = "26-10-03-1"
+        with tarfile.open(output / f"spice2x-{version}-source.tar.gz") as archive:
+            self.assertEqual(archive.pax_headers["comment"], self.source_commit)
+            source = archive.extractfile(f"spice2x-{version}/controller/app.js").read()
+            self.assertEqual(source, b"console.log('controller');\n")
+        with zipfile.ZipFile(output / f"spice2x-{version}.zip") as archive:
+            self.assertEqual(archive.read("LICENSE.txt"), b"fixture license\n")
+            self.assertEqual(archive.read("FORK_VERSION"), (version + "\n").encode())
 
     def test_rejects_invalid_version_or_upstream_base(self):
         self._write("FORK_VERSION", "not-a-version\n")

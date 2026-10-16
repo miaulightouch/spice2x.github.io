@@ -99,7 +99,15 @@ sha256sum -c SHA256SUMS
 
 It requires regular and XP binaries and the matching commit source archive from
 `build_all.sh`. Tracked changes, untracked source and stale build snapshots are
-rejected; ignored build/runtime files are allowed. It emits:
+rejected; ignored build/runtime files are allowed.
+
+All source and metadata are read from the captured commit, even if the checkout
+advances during packaging. Binary input must contain regular files without
+symlinks. The embedded build snapshot is a consistency check, not proof that
+executable bytes were produced by a trusted builder; use your own build or
+artifacts from the successful CI run for that exact commit.
+
+It emits:
 
 | File | Contents |
 | --- | --- |
