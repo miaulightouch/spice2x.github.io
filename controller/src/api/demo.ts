@@ -31,6 +31,11 @@ export class DemoApi implements Rpc {
       if (fn === 'read') return [...this.buttons].map(([name, enabled]) => [name, enabled ? 1 : 0, enabled]);
       if (fn === 'write') for (const [name, pressed] of params as [string, boolean][]) this.buttons.set(name, pressed);
       if (fn === 'write_reset') for (const name of this.buttons.keys()) this.buttons.set(name, false);
+      if (fn === 'pulse') {
+        const name = String(params[0]); this.buttons.set(name, true);
+        try { await new Promise(resolve => setTimeout(resolve, Number(params[1] ?? 180))); }
+        finally { this.buttons.set(name, false); }
+      }
       return [];
     }
     if (module === 'coin') {

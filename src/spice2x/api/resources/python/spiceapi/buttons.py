@@ -26,3 +26,10 @@ def buttons_write_reset(con: Connection, button_names=None):
     for button_name in button_names:
         req.add_param(button_name)
     con.request(req)
+
+
+def buttons_pulse(con: Connection, button_name, duration_ms=180):
+    req = Request("buttons", "pulse")
+    req.add_param(button_name)
+    req.add_param(duration_ms)
+    con.request(req)

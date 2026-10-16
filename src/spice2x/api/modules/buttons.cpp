@@ -1,11 +1,15 @@
 #include "buttons.h"
+#include <chrono>
 #include <functional>
+#include <mutex>
+#include <thread>
 #include "external/rapidjson/document.h"
 #include "misc/eamuse.h"
 #include "cfg/button.h"
 #include "launcher/launcher.h"
 #include "games/io.h"
 #include "util/utils.h"
+#include "util/scope_guard.h"
 #include "acio/mdxf/mdxf_poll.h"
 
 using namespace std::placeholders;
@@ -14,10 +18,17 @@ using namespace rapidjson;
 
 namespace api::modules {
 
+    namespace {
+        constexpr unsigned int DEFAULT_PULSE_MS = 180;
+        constexpr unsigned int MAX_PULSE_MS = 2000;
+        std::mutex BUTTONS_MUTEX;
+    }
+
     Buttons::Buttons() : Module("buttons") {
         functions["read"] = std::bind(&Buttons::read, this, _1, _2);
         functions["write"] = std::bind(&Buttons::write, this, _1, _2);
         functions["write_reset"] = std::bind(&Buttons::write_reset, this, _1, _2);
+        functions["pulse"] = std::bind(&Buttons::pulse, this, _1, _2);
         buttons = games::get_buttons(eamuse_get_game());
     }
 
@@ -25,6 +36,8 @@ namespace api::modules {
      * read()
      */
     void Buttons::read(api::Request &req, Response &res) {
+
+        std::lock_guard lock(BUTTONS_MUTEX);
 
         // check button cache
         if (!this->buttons) {
@@ -48,6 +61,8 @@ namespace api::modules {
      * write([name: str, state: bool/float], ...)
      */
     void Buttons::write(Request &req, Response &res) {
+
+        std::lock_guard lock(BUTTONS_MUTEX);
 
         // check button cache
         if (!buttons) {
@@ -94,6 +109,8 @@ namespace api::modules {
      */
     void Buttons::write_reset(Request &req, Response &res) {
 
+        std::lock_guard lock(BUTTONS_MUTEX);
+
         // check button cache
         if (!this->buttons) {
             return;
@@ -139,6 +156,73 @@ namespace api::modules {
                 continue;
             }
         }
+    }
+
+    /**
+     * pulse(name: str, duration_ms: uint = 180)
+     * A single request owns the press and release, so a disconnected client cannot leave it held.
+     */
+    void Buttons::pulse(Request &req, Response &res) {
+
+        if (!this->buttons) {
+            error(res, "buttons unavailable");
+            return;
+        }
+        if (req.params.Size() < 1) {
+            error_params_insufficient(res);
+            return;
+        }
+        if (req.params.Size() > 2) {
+            error(res, "pulse expects [name, duration_ms]");
+            return;
+        }
+        if (!req.params[0].IsString()) {
+            error_type(res, "name", "string");
+            return;
+        }
+
+        unsigned int duration = DEFAULT_PULSE_MS;
+        if (req.params.Size() == 2) {
+            const auto &duration_param = req.params[1];
+            if (!duration_param.IsUint() && !duration_param.IsInt()) {
+                error_type(res, "duration_ms", "uint");
+                return;
+            }
+            if (duration_param.IsUint()) {
+                duration = duration_param.GetUint();
+            } else if (duration_param.GetInt() > 0) {
+                duration = static_cast<unsigned int>(duration_param.GetInt());
+            } else {
+                duration = 0;
+            }
+        }
+        if (duration == 0 || duration > MAX_PULSE_MS) {
+            error(res, "duration_ms must be between 1 and 2000");
+            return;
+        }
+
+        const std::string button_name = req.params[0].GetString();
+        std::lock_guard lock(BUTTONS_MUTEX);
+        for (auto &button : *this->buttons) {
+            if (button.getName() != button_name) {
+                continue;
+            }
+            if (button.override_enabled) {
+                error(res, "button is already overridden: " + button_name);
+                return;
+            }
+            const auto release = scope_guard{[&button] {
+                button.override_enabled = false;
+                mdxf_poll(true);
+            }};
+            button.override_state = GameAPI::Buttons::BUTTON_PRESSED;
+            button.override_velocity = 1.f;
+            button.override_enabled = true;
+            mdxf_poll(true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(duration));
+            return;
+        }
+        error_unknown(res, "button", button_name);
     }
 
     bool Buttons::write_button(std::string name, float state) {

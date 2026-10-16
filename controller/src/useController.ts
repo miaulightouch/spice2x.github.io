@@ -229,9 +229,7 @@ export function useController() {
       const name = exactButton(label);
       if (!name) throw new LocalizedError('error.button', { label });
       const rpc = api.value!;
-      await rpc.request('buttons', 'write', [[name, true]]);
-      try { await new Promise(resolve => setTimeout(resolve, 180)); }
-      finally { await rpc.request('buttons', 'write_reset', [[name]]); }
+      await rpc.request('buttons', 'pulse', [name, 180]);
       notify(msg('msg.pulsed', { label: label.toUpperCase() }));
     });
   }
