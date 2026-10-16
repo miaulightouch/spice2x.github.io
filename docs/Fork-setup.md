@@ -58,18 +58,12 @@ To identify which case applies:
 
 The application does not change EWF/FBWF settings. A successful save means the OS accepted the file write; it cannot guarantee that a write filter or startup script will retain it after reboot.
 
-## API and development
+## API
 
 The fork adds `resize.image_resize_get`, `resize.image_resize_set`, and `resize.image_resize_save`; see the [API reference](../src/spice2x/README.md#resize). The save API preserves existing window settings. Scene persistence and validation are shared code on all Windows builds; the WGL hook and XP power flags remain guarded by `SPICE_XP`.
-
-Web source is in [`controller/`](../controller/) on `main`. GitHub Actions builds and deploys Pages from that source after the controller and fork regression checks pass. See that directory's README for local development and the [fork workflow](Fork-workflow.md) for contributions and releases.
 
 ## OpenGL latency
 
 The XP OpenGL transform runs immediately before the existing buffer swap. It does not queue or deliberately delay a frame. Active scaling currently copies the framebuffer into a GPU texture, redraws it in a separate WGL context, and uses two `glFinish()` synchronization points to preserve ordering across contexts. These waits serialize work and can increase frame time; missing a refresh deadline can add a refresh interval of display latency. They may also reduce existing GPU queue depth, so CPU wait time is not a direct measurement of input-to-display latency.
 
 An identity scene (100% on both axes, zero offsets, no duplication) now bypasses the extra copy, draw, context switches and GPU waits. Filtering and aspect-lock flags alone do not prevent this bypass. Active transforms cache context-constant texture/buffer capabilities and avoid reapplying unchanged texture parameters. They retain the tested synchronization and compatibility path. A same-context pass could avoid cross-context waits, but requires preserving the game's shader/FBO/texture/fixed-function state and validating the legacy ATI driver. Simply removing `glFinish()` or replacing it with `glFlush()` is not a proven-safe latency fix. No millisecond or zero-latency claim is made without cabinet measurements.
-
-## Fork versions
-
-Fork release names and tags use `<upstream version>-<build number>`, recorded in `FORK_VERSION` and validated by `python3 scripts/fork_version.py`. Archive bases are `spice2x-<version>`. For example, `26-10-03-1` is the first build using this convention for upstream version `26-10-03`; increment the build number for subsequent fork releases. `UPSTREAM_BASE` records the exact upstream source snapshot, which can include commits after the upstream release. The local packager adds `FORK_VERSION`, `RELEASE.json`, complete native/controller source and `SHA256SUMS`; it is not connected to the unchanged upstream release workflow. Existing historical tags and binary assets remain available for old links; see the [release history](Releases.md).
