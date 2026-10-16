@@ -309,6 +309,15 @@ which also means that your hex edits are applicable directly.
   - returns information about the serial LCD controller some games use
 
 #### Resize
+Image transforms are implemented on the Direct3D 9 path and on jubeat's legacy
+OpenGL path in `SPICE_XP` builds. Non-XP builds neither compile nor initialize
+this experimental WGL backend. OpenGL uses only 1.1 functions and a separate
+context; it supports scaling, offsets, filtering and left/right duplication. The texture must fit
+the driver's maximum power-of-two texture size. Failures are logged under
+`graphics::opengl`. OpenGL screenshot/capture and overlay support are unchanged.
+Other rendering backends can store these settings without applying a transform.
+A successful save confirms an accepted file write, not rendering or retention through an Embedded write filter.
+
 - image_resize_enable(enable: bool)
   - enables or disables image resize state
 - image_resize_set_scene(scene: int)
@@ -335,11 +344,13 @@ which also means that your hex edits are applicable directly.
   - this scales and positions the game image; it does not change the monitor's
     output resolution or the OS window dimensions
 - image_resize_save()
-  - requires an API password and saves all four scenes, the enabled state, and
-    the linear filter setting to the existing screen resize config file
+  - requires an API password and saves all four scenes, the active scene, the
+    enabled state, and the linear filter setting to the existing screen resize config file
   - preserves the window settings already stored in that file
   - reports a save failure in `errors`; updates are otherwise only in memory
-  - as with the existing config, scene 1 is selected on the next game launch
+  - restores the saved active scene on the next game launch; legacy files without
+    a selected scene default to scene 1. See [persistence troubleshooting](../../docs/Fork-setup.md#settings-after-restarting)
+    for Embedded write filters and the `-configdir` / `-portable` storage options
 
 For example, enable scene 1 and adjust its position and independent scales:
 
@@ -367,6 +378,15 @@ protocol over TCP or WebSocket, not HTTP POST.
 The focused native regression tests can be run with Python 3 and a C++20 compiler:
 `python3 api/tests/run_resize_tests.py`. They compile the production API and config
 code with portable logging/file adapters; they do not test Direct3D rendering.
+`python3 api/tests/run_control_tests.py` tests the production power-control API and
+privilege helper against inert Win32 adapters with `SPICE_XP=0` and `SPICE_XP=1`,
+including XP power-off flags, preserved non-XP hybrid-shutdown flags, Windows
+error propagation. Token cleanup, privilege validation
+and error reporting are shared fixes using the same Win32 API contracts on both
+build paths. The GL renderer has real pixel tests:
+`python3 hooks/graphics/backends/opengl/tests/run_render_tests.py` (Linux Mesa EGL,
+NumPy and a C++20 compiler). WGL hooks, legacy GPU drivers and actual Windows XP
+power-off still require testing on the target machine.
 
 ## Video Stream
 

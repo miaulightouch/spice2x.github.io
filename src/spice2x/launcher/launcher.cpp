@@ -283,6 +283,11 @@ int main_implementation(int argc, char *argv[]) {
         launcher::USE_CMD_OVERRIDE = true;
     }
 
+    // Resolve the storage root before loading XML/game option overrides.
+    fileutils::set_config_directory(
+        LAUNCHER_OPTIONS->at(launcher::Options::ConfigDirectory).value_text(),
+        LAUNCHER_OPTIONS->at(launcher::Options::PortableConfig).value_bool());
+
     // determine config file path - must be done before anything else
     const auto &cfg_path = LAUNCHER_OPTIONS->at(launcher::Options::ConfigurationPath);
     if (cfg_path.is_active()) {
@@ -951,10 +956,6 @@ int main_implementation(int argc, char *argv[]) {
     }
     if (options[launcher::Options::DisableAvsCache].is_active()) {
         hooks::avs::config::DISABLE_CACHE = true;
-    }
-    if (options[launcher::Options::ScreenResizeConfigPath].is_active()) {
-        cfg::SCREEN_RESIZE_CFG_PATH_OVERRIDE =
-            options[launcher::Options::ScreenResizeConfigPath].value_text();
     }
     if (options[launcher::Options::PatchManagerConfigPath].is_active()) {
         patcher::PATCH_MANAGER_CFG_PATH_OVERRIDE =

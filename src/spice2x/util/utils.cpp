@@ -88,31 +88,27 @@ std::string ws2s(const std::wstring &wstr) {
 }
 
 bool acquire_shutdown_privs() {
-
-    // check if already acquired
-    static bool acquired = false;
-    if (acquired)
-        return true;
-
-    // get process token
-    HANDLE hToken;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
         return false;
 
-    // get the LUID for the shutdown privilege
-    TOKEN_PRIVILEGES tkp;
-    LookupPrivilegeValue(NULL, SE_SHUTDOWN_NAME, &tkp.Privileges[0].Luid);
-    tkp.PrivilegeCount = 1;
-    tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-
-    // get the shutdown privilege for this process
-    AdjustTokenPrivileges(hToken, FALSE, &tkp, 0, (PTOKEN_PRIVILEGES) NULL, 0);
-
-    // check for error
-    bool success = GetLastError() == ERROR_SUCCESS;
-    if (success)
-        acquired = true;
-    return success;
+    TOKEN_PRIVILEGES privileges {};
+    if (!LookupPrivilegeValue(nullptr, SE_SHUTDOWN_NAME, &privileges.Privileges[0].Luid)) {
+        const DWORD error = GetLastError();
+        CloseHandle(token);
+        SetLastError(error);
+        return false;
+    }
+    privileges.PrivilegeCount = 1;
+    privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    SetLastError(ERROR_SUCCESS);
+    const BOOL adjusted = AdjustTokenPrivileges(token, FALSE, &privileges, 0, nullptr, nullptr);
+    // A nonzero return can still mean ERROR_NOT_ALL_ASSIGNED. Preserve the error
+    // across CloseHandle so the API can report the actual Windows failure.
+    const DWORD error = GetLastError();
+    CloseHandle(token);
+    SetLastError(error);
+    return adjusted && error == ERROR_SUCCESS;
 }
 
 void generate_ea_card(char card[17]) {

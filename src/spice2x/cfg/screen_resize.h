@@ -3,7 +3,6 @@
 #include <atomic>
 #include <memory>
 #include <string>
-#include <optional>
 #include <filesystem>
 #include <mutex>
 #include "external/rapidjson/document.h"
@@ -30,8 +29,6 @@ namespace cfg {
         bool keep_aspect_ratio = true;
         ScreenDuplicateMode duplicate = ScreenDuplicateMode::None;
     };
-
-    extern std::optional<std::string> SCREEN_RESIZE_CFG_PATH_OVERRIDE;
 
     class ScreenResize {
     private:

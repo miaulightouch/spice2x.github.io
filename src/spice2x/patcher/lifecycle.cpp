@@ -57,7 +57,7 @@ namespace patcher {
 
     void init() {
         if (PATCH_MANAGER_CFG_PATH_OVERRIDE.has_value()) {
-            config_path = PATCH_MANAGER_CFG_PATH_OVERRIDE.value();
+            config_path = fileutils::expand_config_path(PATCH_MANAGER_CFG_PATH_OVERRIDE.value());
             log_info("patchmanager", "using custom config file path: {}", config_path);
         } else {
             config_path =

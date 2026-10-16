@@ -14,13 +14,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_COMMIT: d9ff6619e68a73150c82ef786ded4a8122ed38af
-      CI_HEAD_SHA: 1c7eee6d4409674a2e57cdb60cf06e400ac69cfa
-      CI_RUN_ID: '38805031986'
+      RELEASE_COMMIT: b1f2fdb918a79b6b65f178291577b2b8c3d852d0
+      CI_HEAD_SHA: 5dad56cc2545bba871aee9028784957c9eea0740
+      CI_RUN_ID: '38833325591'
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: d9ff6619e68a73150c82ef786ded4a8122ed38af
+          ref: b1f2fdb918a79b6b65f178291577b2b8c3d852d0
           fetch-depth: 0
       - name: Verify successful CI and matching source tree
         run: |
@@ -72,7 +72,8 @@ jobs:
           or -portable to read/write beside the EXE. Per-file paths take priority.
           Copy existing settings to the chosen root before switching.
           Remembers the saved calibration scene across game restarts.
-          Use -resizecfgpath for a path verified to survive Embedded write filters.
+          Choose a settings directory verified to survive Embedded write filters.
+          Calibration uses spicetools_screen_resize.json within that directory.
           Includes XP-compatible power-off and experimental legacy jubeat OpenGL
           calibration. WGL behavior, legacy GPU drivers and actual XP shutdown
           still require testing on the target machine.
@@ -82,30 +83,25 @@ jobs:
       - name: Publish prerelease
         run: |
           cat > "$RUNNER_TEMP/resize-api-release-notes.md" <<'NOTES'
-          - Add -configdir "%APPDATA%\spice" (or any chosen directory) for main XML and helper settings.
-          - Add -portable to read/write beside the running EXE, independent of the working directory.
-            Copy existing settings into the chosen root before switching. Per-file overrides take priority
-            and support environment variables; existing defaults are unchanged without these options.
-          - Reduce XP OpenGL overhead: bypass identity transforms and cache immutable capabilities
-            and unchanged texture parameters. Active scaling retains synchronization and state isolation;
-            no zero-latency or measured-millisecond claim is made.
-          - Use <upstream version>-<build number> for the release, tag and archive version.
-            FORK_VERSION is included in all archives. Historical tags remain available.
+          - Remove the separate screen resize config path override.
+          - Calibration now uses the common settings directory and the fixed filename
+            spicetools_screen_resize.json. Choose a directory with -configdir (including
+            %APPDATA%\spice or any writable path), or -portable to store beside the EXE.
+          - Update setup and Embedded persistence instructions to use the shared directory.
 
-          Setup and latency notes: https://github.com/miaulightouch/spice2x.github.io/blob/main/docs/Fork-setup.md
+          Setup: https://github.com/miaulightouch/spice2x.github.io/blob/main/docs/Fork-setup.md
 
           Upstream version: 26-10-03. Source snapshot: upstream main c83496776e4dfa06f286e483d21fd269c331505c
           (2026-10-12), six commits after that release. Fork changes are applied on top.
 
           The -winxp.zip contains XP 32-bit spice.exe and spicecfg.exe for an existing installation;
           preserve game files, modules and launch arguments. The standard ZIP contains regular binaries,
-          and the full ZIP includes XP extras. Game/NVRAM/log paths are not redirected.
+          and the full ZIP includes XP extras. All archives include FORK_VERSION.
 
-          Validation: existing GNU/XP and MSVC CI builds; 161 resize/config checks + 400 concurrent updates;
-          config-path helpers with real file round trips and inert Win32 boundaries; native power-control
-          tests for SPICE_XP=0 and 1; local Mesa EGL pixel checks; release-version validation.
-          Target-machine WGL/ATI behavior and input-to-display latency still require measurement.
-          See PR #5. Main and the source PR have no GitHub Actions changes.
+          Validation: existing GNU/XP and MSVC CI builds; 161 resize API checks + 400 concurrent updates;
+          config-path regressions; native power-control checks for SPICE_XP=0 and 1.
+          Target-machine WGL/ATI behavior and XP shutdown still require testing on the cabinet.
+          See PR #6. Main and the source PR have no GitHub Actions changes.
 
           NOTES
           printf '\nCI: https://github.com/%s/actions/runs/%s\n' "$GH_REPO" "$CI_RUN_ID" \

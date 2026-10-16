@@ -14,20 +14,11 @@ namespace cfg {
 
     // globals
     std::unique_ptr<cfg::ScreenResize> SCREENRESIZE;
-    std::optional<std::string> SCREEN_RESIZE_CFG_PATH_OVERRIDE;
 
     ScreenResize::ScreenResize() {
         bool file_exists = false;
-        if (SCREEN_RESIZE_CFG_PATH_OVERRIDE.has_value()) {
-            this->config_path = SCREEN_RESIZE_CFG_PATH_OVERRIDE.value();
-            if (fileutils::file_exists(this->config_path)) {
-                log_info("ScreenResize", "loading config from: {}", this->config_path);
-                file_exists = true;
-            }
-        } else {
-            this->config_path =
-                fileutils::get_config_file_path("ScreenResize", "spicetools_screen_resize.json", &file_exists);
-        }
+        this->config_path =
+            fileutils::get_config_file_path("ScreenResize", "spicetools_screen_resize.json", &file_exists);
         if (file_exists) {
             this->config_load();
         }
@@ -86,6 +77,15 @@ namespace cfg {
         }
 
         load_bool_value(doc, root + "enable_linear_filter", this->enable_linear_filter);
+        // Older configs did not store the selected scene and start with Scene 1.
+        // Validate before narrowing: the renderer uses this value as an array index.
+        int current_scene = 0;
+        load_int_value(doc, root + "screen_resize_current_scene", current_scene);
+        if (current_scene < 0 || current_scene >= static_cast<int>(std::size(this->scene_settings))) {
+            log_warning("ScreenResize", "invalid saved scene {}; using Scene 1", current_scene);
+            current_scene = 0;
+        }
+        this->screen_resize_current_scene = static_cast<int8_t>(current_scene);
         for (size_t i = 0; i < std::size(this->scene_settings); i++) {
             auto& scene = this->scene_settings[i];
             const std::string prefix = fmt::format("scenes/{}/", i);
@@ -205,6 +205,8 @@ namespace cfg {
         // full screen image settings
         rapidjson::Pointer(root + "enable_screen_resize").Set(doc, this->enable_screen_resize);
         rapidjson::Pointer(root + "enable_linear_filter").Set(doc, this->enable_linear_filter);
+        rapidjson::Pointer(root + "screen_resize_current_scene").Set(
+            doc, static_cast<int>(this->screen_resize_current_scene));
         for (size_t i = 0; i < std::size(this->scene_settings); i++) {
             auto& scene = this->scene_settings[i];
             const std::string prefix = fmt::format("scenes/{}/", i);

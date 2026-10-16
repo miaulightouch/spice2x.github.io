@@ -1551,6 +1551,24 @@ static const std::vector<OptionDefinition> OPTION_DEFINITIONS = std::invoke([]()
         .category = "Path Overrides",
         .picker = OptionPickerType::DirectoryPath,
     };
+    c[launcher::Options::ConfigDirectory] = {
+        .title = "Config Directory",
+        .name = "configdir",
+        .desc = "Sets the directory for spice2x XML and helper settings. Command line only. "
+            "Expands environment variables such as %APPDATA%. Per-file path overrides take priority.",
+        .type = OptionType::Text,
+        .category = "Path Overrides",
+        .disabled = true,
+    };
+    c[launcher::Options::PortableConfig] = {
+        .title = "Portable Config",
+        .name = "portable",
+        .desc = "Reads and writes spice2x settings beside the running EXE. Command line only. "
+            "An explicit -configdir or per-file path takes priority.",
+        .type = OptionType::Bool,
+        .category = "Path Overrides",
+        .disabled = true,
+    };
     c[launcher::Options::ConfigurationPath] = {
         .title = "Configuration Path Override",
         .name = "cfgpath",
@@ -1560,16 +1578,6 @@ static const std::vector<OptionDefinition> OPTION_DEFINITIONS = std::invoke([]()
         .setting_name = "(default)",
         .category = "Path Overrides",
         .disabled = true,
-    };
-    c[launcher::Options::ScreenResizeConfigPath] = {
-        .title = "Screen Resize Config Path Override",
-        .name = "resizecfgpath",
-        .desc = "Sets a custom file path for screen resize config file. "
-            "If left empty, %appdata%\\spice2x\\spicetools_screen_resize.json will be used.",
-        .type = OptionType::Text,
-        .category = "Path Overrides",
-        .picker = OptionPickerType::FilePath,
-        .file_extension = "JSON",
     };
     c[launcher::Options::PatchManagerConfigPath] = {
         .title = "Patch Manager Config Path Override",
