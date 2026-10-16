@@ -16,4 +16,4 @@
 - Use upstream CI/release scripts and naming; do not add a separate version file or packager. Build task branches from a clean detached checkout when needed. Verify release artifacts match the tested `main` commit; preserve existing tags and assets.
 - Put build/test output in ignored `build/` or component output directories; keep private runtime state, diagnostics and review records in ignored `local/`.
 - Run affected tests and upstream builds. For controller changes, run `npm ci`, `npm test` and `npm run build` in `controller/` with Node.js 22.12+.
-- Preserve API, command-line and config compatibility. Guard XP-only behavior with `SPICE_XP`; distinguish automated checks from real cabinet/driver/input verification.
+- Preserve API, command-line and config compatibility except the intentionally removed `-resizecfgpath` option. Guard XP-only behavior with `SPICE_XP`; distinguish automated checks from real cabinet/driver/input verification.
