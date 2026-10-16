@@ -350,7 +350,7 @@ A successful save confirms an accepted file write, not rendering or retention th
   - reports a save failure in `errors`; updates are otherwise only in memory
   - restores the saved active scene on the next game launch; legacy files without
     a selected scene default to scene 1. See [persistence troubleshooting](../../docs/Fork-setup.md#settings-after-restarting)
-    for Embedded write filters and the existing `-resizecfgpath` override
+    for Embedded write filters and the `-configdir` / `-portable` storage options
 
 For example, enable scene 1 and adjust its position and independent scales:
 
