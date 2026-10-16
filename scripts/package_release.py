@@ -16,9 +16,9 @@ import tempfile
 import zipfile
 
 try:
-    from .fork_version import read_version
+    from .fork_version import parse_version
 except ImportError:  # Running the file directly from scripts/.
-    from fork_version import read_version
+    from fork_version import parse_version
 
 
 class PackageError(RuntimeError):
@@ -75,6 +75,9 @@ def package_release(repo_root: Path | str, binaries: Path | str, output: Path | 
         if path.is_symlink() or not path.is_file():
             kind = "Windows XP binary" if relative.startswith("extras/winxp/") else "regular binary"
             raise PackageError(f"missing {kind} {relative}: {path}")
+    for path in binary_dir.rglob("*"):
+        if path.is_symlink():
+            raise PackageError(f"symlinks are not allowed in binary input: {path}")
     try:
         output_dir.relative_to(binary_dir)
     except ValueError:
@@ -89,16 +92,16 @@ def package_release(repo_root: Path | str, binaries: Path | str, output: Path | 
     if _git(repo, "status", "--porcelain=v1", "--untracked-files=all"):
         raise PackageError("working tree has tracked changes or untracked source; commit before packaging")
     source_commit = _git(repo, "rev-parse", "HEAD")
-    source_tree = _git(repo, "rev-parse", "HEAD^{tree}")
+    source_tree = _git(repo, "rev-parse", f"{source_commit}^{{tree}}")
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit) or not re.fullmatch(r"[0-9a-f]{40}", source_tree):
         raise PackageError("unable to resolve a complete source HEAD commit/tree")
     try:
-        version = read_version(repo / "FORK_VERSION")
-    except (OSError, ValueError) as exc:
+        version = parse_version(_git(repo, "show", f"{source_commit}:FORK_VERSION"))
+    except (subprocess.CalledProcessError, ValueError) as exc:
         raise PackageError(str(exc)) from exc
     try:
-        upstream_base = (repo / "UPSTREAM_BASE").read_text(encoding="utf-8").strip()
-    except OSError as exc:
+        upstream_base = _git(repo, "show", f"{source_commit}:UPSTREAM_BASE")
+    except subprocess.CalledProcessError as exc:
         raise PackageError(f"unable to read UPSTREAM_BASE: {exc}") from exc
     if not re.fullmatch(r"[0-9a-fA-F]{40}", upstream_base):
         raise PackageError("UPSTREAM_BASE must be a complete 40-hex git commit")
@@ -142,14 +145,13 @@ def package_release(repo_root: Path | str, binaries: Path | str, output: Path | 
         with source_archive.open("wb") as stream:
             subprocess.run(
                 ["git", "-C", str(repo), "archive", "--format=tar.gz",
-                 f"--prefix=spice2x-{version}/", "HEAD"],
+                 f"--prefix=spice2x-{version}/", source_commit],
                 check=True, stdout=stream, stderr=subprocess.PIPE,
             )
         shutil.copy2(source_archive, stage_src / source_name)
-        license_path = repo / "LICENSE"
-        if not license_path.is_file():
-            raise PackageError(f"missing repository license: {license_path}")
-        shutil.copy2(license_path, stage / "LICENSE.txt")
+        (stage / "LICENSE.txt").write_bytes(subprocess.check_output(
+            ["git", "-C", str(repo), "show", f"{source_commit}:LICENSE"],
+        ))
         (stage / "FORK_VERSION").write_text(version + "\n", encoding="utf-8")
         metadata_bytes = (json.dumps(metadata, indent=2) + "\n").encode("utf-8")
         (stage / "RELEASE.json").write_bytes(metadata_bytes)
