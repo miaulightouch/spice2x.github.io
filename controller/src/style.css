@@ -153,6 +153,8 @@ summary { min-height: 44px; padding-block: 12px; cursor: pointer; color: var(--a
 .connection-help p { margin-bottom: 10px; }
 .connection-help button { margin-top: 4px; }
 .app-footer { border-top: 1px solid var(--line); padding: 10px 16px; }
+.log-panel { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 12px; }
+.log-panel pre { max-height: 60vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
 .feedback { font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .feedback.has-error { color: var(--danger); }
 .footer-meta { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 10px; color: var(--muted); margin-top: 5px; overflow-wrap: anywhere; }

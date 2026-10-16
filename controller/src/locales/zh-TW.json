@@ -192,5 +192,15 @@
   "error.extra": "API 回應包含額外資料，已關閉連線。",
   "error.response": "API 回應格式或要求編號不符。",
   "error.key": "API 未提供有效的會話金鑰。",
-  "msg.savedStatus": "{summary} {state}"
+  "msg.savedStatus": "{summary} {state}",
+  "log.title": "機台日誌",
+  "log.hint": "顯示最新 64 KiB。下載會取得請求開始時的完整日誌。需要 API 密碼。",
+  "log.refresh": "更新日誌",
+  "log.download": "下載日誌",
+  "log.size": "{n} 位元組",
+  "log.search": "篩選日誌行",
+  "log.empty": "尚未載入日誌。",
+  "error.logFormat": "日誌回應格式無效。",
+  "error.logChanged": "下載期間日誌已變更，請更新後重試。",
+  "error.logPassword": "請使用 API 密碼連線以讀取日誌。"
 }
