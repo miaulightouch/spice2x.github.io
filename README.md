@@ -1,5 +1,3 @@
-# spice2x — Arcade Room fork
+# spice2x
 
-Web controls, image calibration, portable settings and cabinet logs for [spice2x](https://github.com/spice2x/spice2x.github.io).
-
-[Web controller](https://miaulightouch.github.io/spice2x.github.io/) · [Usage](https://github.com/miaulightouch/spice2x.github.io/wiki/Fork-setup) · [Releases](https://github.com/miaulightouch/spice2x.github.io/releases) · [Upstream guide](https://github.com/spice2x/spice2x.github.io/wiki)
+[Web controller](https://miaulightouch.github.io/spice2x.github.io/) · [Setup](https://github.com/miaulightouch/spice2x.github.io/wiki/Setup) · [Releases](https://github.com/miaulightouch/spice2x.github.io/releases) · [Upstream guide](https://github.com/spice2x/spice2x.github.io/wiki)
