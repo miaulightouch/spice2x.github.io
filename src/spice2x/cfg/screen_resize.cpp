@@ -14,20 +14,11 @@ namespace cfg {
 
     // globals
     std::unique_ptr<cfg::ScreenResize> SCREENRESIZE;
-    std::optional<std::string> SCREEN_RESIZE_CFG_PATH_OVERRIDE;
 
     ScreenResize::ScreenResize() {
         bool file_exists = false;
-        if (SCREEN_RESIZE_CFG_PATH_OVERRIDE.has_value()) {
-            this->config_path = fileutils::expand_config_path(SCREEN_RESIZE_CFG_PATH_OVERRIDE.value());
-            if (fileutils::file_exists(this->config_path)) {
-                log_info("ScreenResize", "loading config from: {}", this->config_path);
-                file_exists = true;
-            }
-        } else {
-            this->config_path =
-                fileutils::get_config_file_path("ScreenResize", "spicetools_screen_resize.json", &file_exists);
-        }
+        this->config_path =
+            fileutils::get_config_file_path("ScreenResize", "spicetools_screen_resize.json", &file_exists);
         if (file_exists) {
             this->config_load();
         }
