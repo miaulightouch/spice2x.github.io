@@ -1,8 +1,10 @@
 #pragma once
 
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <string>
 
 #include "external/fmt/include/fmt/format.h"
@@ -16,6 +18,11 @@ inline void resize_test_log(const Args &...) {
 #define log_warning(...) resize_test_log(__VA_ARGS__)
 
 inline bool resize_test_write_failure = false;
+inline std::mutex resize_test_io_mutex;
+inline std::condition_variable resize_test_io_cv;
+inline bool resize_test_block_write = false;
+inline bool resize_test_write_started = false;
+inline int resize_test_write_count = 0;
 
 inline std::string eamuse_get_game() {
     return "Resize API Test";
@@ -41,6 +48,16 @@ namespace fileutils {
             const std::filesystem::path &path, const std::string &contents) {
         if (resize_test_write_failure) {
             return false;
+        }
+        {
+            std::unique_lock<std::mutex> lock(resize_test_io_mutex);
+            ++resize_test_write_count;
+            resize_test_io_cv.notify_all();
+            if (resize_test_block_write) {
+                resize_test_write_started = true;
+                resize_test_io_cv.notify_all();
+                resize_test_io_cv.wait(lock, [] { return !resize_test_block_write; });
+            }
         }
         std::ofstream stream(path);
         stream << contents;
