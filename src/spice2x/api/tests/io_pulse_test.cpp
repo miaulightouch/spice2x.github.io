@@ -11,7 +11,7 @@
 #include "analogs.h"
 #include "lights.h"
 
-rawinput::RawInputManager *RI_MGR = nullptr;
+std::unique_ptr<rawinput::RawInputManager> RI_MGR;
 int io_pulse_flush_count = 0;
 std::vector<float> io_pulse_light_outputs;
 std::vector<Analog> ANALOGS {Analog("Axis"), Analog("Other")};
@@ -123,7 +123,7 @@ int main() {
 
     api::modules::Lights lights;
     cfg::CONFIGURATOR_STANDALONE = true;
-    RI_MGR = reinterpret_cast<rawinput::RawInputManager *>(1);
+    RI_MGR = std::make_unique<rawinput::RawInputManager>();
     LIGHTS[0].override_state = 0.17f;
     LIGHTS[0].override_enabled = false;
     LIGHTS[0].last_state = 0.31f;
@@ -168,14 +168,23 @@ int main() {
         assert(io_pulse_flush_count == 0);
     }
 
-    RI_MGR = nullptr;
+    cfg::CONFIGURATOR_STANDALONE = false;
+    RI_MGR = std::make_unique<rawinput::RawInputManager>();
+    LIGHTS[0].override_enabled = false;
+    LIGHTS[0].last_state = 0.31f;
+    io_pulse_light_outputs.clear();
     io_pulse_flush_count = 0;
     result = call_lights(lights, "pulse", R"(["Lamp",0.5,1])");
     assert(result["errors"].Empty());
-    assert(io_pulse_flush_count == 0);
+    assert(io_pulse_light_outputs.size() == 2);
+    assert(std::abs(io_pulse_light_outputs[0] - 0.5f) < 0.0001f);
+    assert(std::abs(io_pulse_light_outputs[1] - 0.31f) < 0.0001f);
+    assert(io_pulse_flush_count == 2);
 
+    io_pulse_flush_count = 0;
     LIGHTS[0].override_enabled = false;
     LIGHTS[0].last_state = 0.11f;
+    io_pulse_light_outputs.clear();
     std::atomic<bool> game_pulse_entered = false;
     std::thread game_update([&] {
         while (!game_pulse_entered.load(std::memory_order_acquire)) {
@@ -189,6 +198,38 @@ int main() {
     game_update.join();
     assert(result["errors"].Empty());
     assert(std::abs(LIGHTS[0].last_state - 0.66f) < 0.0001f);
+    assert(io_pulse_light_outputs.size() == 2);
+    assert(std::abs(io_pulse_light_outputs[0] - 0.5f) < 0.0001f);
+    assert(std::abs(io_pulse_light_outputs[1] - 0.66f) < 0.0001f);
+    assert(io_pulse_flush_count == 2);
+
+    LIGHTS[0].override_enabled = false;
+    LIGHTS[0].last_state = 0.11f;
+    io_pulse_light_outputs.clear();
+    io_pulse_flush_count = 0;
+    game_pulse_entered.store(false, std::memory_order_release);
+    std::thread equal_game_update([&] {
+        while (!game_pulse_entered.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::atomic_ref<float>(LIGHTS[0].last_state).store(0.5f, std::memory_order_release);
+    });
+    game_pulse_entered.store(true, std::memory_order_release);
+    result = call_lights(lights, "pulse", R"(["Lamp",0.5,100])");
+    equal_game_update.join();
+    assert(result["errors"].Empty());
+    assert(std::abs(LIGHTS[0].last_state - 0.5f) < 0.0001f);
+    assert(io_pulse_light_outputs.size() == 2);
+    assert(std::abs(io_pulse_light_outputs[0] - 0.5f) < 0.0001f);
+    assert(std::abs(io_pulse_light_outputs[1] - 0.5f) < 0.0001f);
+    assert(io_pulse_flush_count == 2);
+
+    RI_MGR.reset();
+    io_pulse_flush_count = 0;
+    result = call_lights(lights, "pulse", R"(["Lamp",0.5,1])");
+    assert(result["errors"].Empty());
+    assert(io_pulse_flush_count == 0);
 
     GAME = "missing";
     api::modules::Lights missing_lights;

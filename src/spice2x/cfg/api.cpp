@@ -1158,13 +1158,18 @@ void GameAPI::Lights::writeLight(rawinput::RawInputManager *manager, rawinput::D
     device->mutex->unlock();
 }
 
-void GameAPI::Lights::writeLight(rawinput::RawInputManager *manager, Light &light, float value) {
+namespace {
+
+void write_light_internal(rawinput::RawInputManager *manager, Light &light, float value,
+                          bool update_last_state) {
 
     // clamp to range [0,1]
     value = CLAMP(value, 0.f, 1.f);
 
     // write to last state
-    light.last_state = value;
+    if (update_last_state) {
+        light.last_state = value;
+    }
 
     // get device
     auto &devid = light.getDeviceIdentifier();
@@ -1175,9 +1180,9 @@ void GameAPI::Lights::writeLight(rawinput::RawInputManager *manager, Light &ligh
 
         // write state
         if (light.override_enabled) {
-            writeLight(manager, device, light.getIndex(), light.override_state);
+            GameAPI::Lights::writeLight(manager, device, light.getIndex(), light.override_state);
         } else {
-            writeLight(manager, device, light.getIndex(), value);
+            GameAPI::Lights::writeLight(manager, device, light.getIndex(), value);
         }
     }
 
@@ -1186,12 +1191,22 @@ void GameAPI::Lights::writeLight(rawinput::RawInputManager *manager, Light &ligh
         if (light.override_enabled) {
             alternative.override_enabled = true;
             alternative.override_state = light.override_state;
-            writeLight(manager, alternative, light.override_state);
+            write_light_internal(manager, alternative, light.override_state, update_last_state);
         } else {
             alternative.override_enabled = false;
-            writeLight(manager, alternative, value);
+            write_light_internal(manager, alternative, value, update_last_state);
         }
     }
+}
+
+}
+
+void GameAPI::Lights::writeLight(rawinput::RawInputManager *manager, Light &light, float value) {
+    write_light_internal(manager, light, value, true);
+}
+
+void GameAPI::Lights::writeLightOutput(rawinput::RawInputManager *manager, Light &light, float value) {
+    write_light_internal(manager, light, value, false);
 }
 
 void Lights::writeLight(std::unique_ptr<rawinput::RawInputManager> &manager, Light &light, float value) {

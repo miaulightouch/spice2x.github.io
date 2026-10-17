@@ -10,6 +10,7 @@
 #include "misc/eamuse.h"
 #include "cfg/light.h"
 #include "launcher/launcher.h"
+#include "rawinput/rawinput.h"
 #include "games/io.h"
 #include "util/scope_guard.h"
 #include "util/utils.h"
@@ -247,21 +248,18 @@ namespace api::modules {
         auto &light = this->lights_by_names.at(light_name).get();
         const auto previous_state = light.override_state;
         const auto previous_enabled = light.override_enabled;
-        const auto previous_last_state = light.last_state;
-        const auto restore = scope_guard{[&light, previous_state, previous_enabled, previous_last_state] {
+        const auto restore = scope_guard{[&light, previous_state, previous_enabled] {
             light.override_state = previous_state;
             light.override_enabled = previous_enabled;
-            if (cfg::CONFIGURATOR_STANDALONE && RI_MGR) {
-                GameAPI::Lights::writeLight(RI_MGR, light,
-                    previous_enabled ? previous_state : previous_last_state);
+            if (RI_MGR) {
+                GameAPI::Lights::writeLightOutput(RI_MGR.get(), light, light.last_state);
                 RI_MGR->devices_flush_output();
-                light.last_state = previous_last_state;
             }
         }};
         light.override_state = static_cast<float>(value);
         light.override_enabled = true;
-        if (cfg::CONFIGURATOR_STANDALONE && RI_MGR) {
-            GameAPI::Lights::writeLight(RI_MGR, light, static_cast<float>(value));
+        if (RI_MGR) {
+            GameAPI::Lights::writeLightOutput(RI_MGR.get(), light, light.last_state);
             RI_MGR->devices_flush_output();
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(duration));

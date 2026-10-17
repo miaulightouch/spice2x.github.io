@@ -20,7 +20,7 @@ SOURCES = {
     ],
     "api/modules/lights.cpp": [
         "cfg/configurator.h", "misc/eamuse.h", "cfg/light.h", "launcher/launcher.h",
-        "games/io.h", "util/scope_guard.h", "util/utils.h",
+        "games/io.h", "rawinput/rawinput.h", "util/scope_guard.h", "util/utils.h",
     ],
 }
 

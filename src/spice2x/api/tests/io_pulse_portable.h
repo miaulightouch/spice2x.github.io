@@ -4,6 +4,7 @@
 #include <cassert>
 #include <climits>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -28,7 +29,7 @@ namespace rawinput {
     };
 }
 
-extern rawinput::RawInputManager *RI_MGR;
+extern std::unique_ptr<rawinput::RawInputManager> RI_MGR;
 
 #ifndef CLAMP
 #define CLAMP(value, lower, upper) (std::min((upper), std::max((lower), (value))))
@@ -38,6 +39,10 @@ namespace GameAPI::Analogs {
     inline float getState(rawinput::RawInputManager *, Analog &analog) {
         return analog.override_enabled ? analog.override_state : analog.getLastState();
     }
+
+    inline float getState(std::unique_ptr<rawinput::RawInputManager> &manager, Analog &analog) {
+        return getState(manager.get(), analog);
+    }
 }
 
 namespace GameAPI::Lights {
@@ -45,9 +50,43 @@ namespace GameAPI::Lights {
         return light.override_enabled ? light.override_state : light.last_state;
     }
 
+    inline float readLight(std::unique_ptr<rawinput::RawInputManager> &manager, Light &light) {
+        return readLight(manager.get(), light);
+    }
+
+    inline void writeLightInternal(Light &light, float value, bool update_last_state) {
+        value = std::clamp(value, 0.f, 1.f);
+        if (update_last_state) {
+            light.last_state = value;
+        }
+        io_pulse_light_outputs.push_back(light.override_enabled
+            ? std::clamp(light.override_state, 0.f, 1.f)
+            : value);
+        for (auto &alternative : light.getAlternatives()) {
+            if (light.override_enabled) {
+                alternative.override_enabled = true;
+                alternative.override_state = light.override_state;
+                writeLightInternal(alternative, light.override_state, update_last_state);
+            } else {
+                alternative.override_enabled = false;
+                writeLightInternal(alternative, value, update_last_state);
+            }
+        }
+    }
+
     inline void writeLight(rawinput::RawInputManager *, Light &light, float value) {
-        light.last_state = std::clamp(value, 0.f, 1.f);
-        io_pulse_light_outputs.push_back(light.last_state);
+        writeLightInternal(light, value, true);
+    }
+
+    inline void writeLight(std::unique_ptr<rawinput::RawInputManager> &manager,
+                           Light &light, float value) {
+        if (manager) {
+            writeLight(manager.get(), light, value);
+        }
+    }
+
+    inline void writeLightOutput(rawinput::RawInputManager *, Light &light, float value) {
+        writeLightInternal(light, value, false);
     }
 }
 
