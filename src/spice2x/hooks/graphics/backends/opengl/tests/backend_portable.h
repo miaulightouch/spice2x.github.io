@@ -113,6 +113,7 @@ namespace opengl_test {
         HDC current_dc = reinterpret_cast<HDC>(std::uintptr_t {0x22});
         HGLRC private_context = reinterpret_cast<HGLRC>(std::uintptr_t {0x33});
         HWND window = reinterpret_cast<HWND>(std::uintptr_t {0x44});
+        std::map<HDC, HWND> dc_windows;
 
         bool window_from_dc_success = true;
         bool client_rect_success = true;
@@ -349,6 +350,8 @@ inline BOOL WINAPI wglSwapLayerBuffers(HDC dc, UINT planes) {
 inline HWND WindowFromDC(HDC dc) {
     const auto equivalent_dc = reinterpret_cast<HDC>(std::uintptr_t {0x99});
     if (!opengl_test::state.window_from_dc_success) return nullptr;
+    const auto override = opengl_test::state.dc_windows.find(dc);
+    if (override != opengl_test::state.dc_windows.end()) return override->second;
     if (dc == opengl_test::state.current_dc || dc == equivalent_dc) return opengl_test::state.window;
     return nullptr;
 }
@@ -510,6 +513,9 @@ namespace overlay::notifications {
 }
 
 namespace fmt {
+    template<class T>
+    inline const void *ptr(T *value) { return value; }
+
     template<class... Arguments>
     inline std::string format(const char *text, Arguments &&...) {
         return text;

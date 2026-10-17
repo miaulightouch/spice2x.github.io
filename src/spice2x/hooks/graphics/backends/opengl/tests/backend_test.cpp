@@ -353,6 +353,7 @@ namespace {
 
     void test_context_delete_retains_state_on_failure() {
         reset_backend();
+        CHECK(make_current_hook(opengl_test::state.current_dc, opengl_test::state.current_context) == TRUE);
         prime_window();
         clear_observations();
         opengl_test::state.capture_requests.push_back(0);
@@ -365,6 +366,7 @@ namespace {
         opengl_test::state.delete_context_success = false;
         CHECK(delete_context_hook(game_context) == FALSE);
         CHECK(contexts.size() == 1);
+        CHECK(contexts.at(game_context).owner_window == opengl_test::state.window);
         CHECK(opengl_test::state.deleted_contexts.size() == 1);
         CHECK(opengl_test::state.deleted_contexts.front() == game_context);
 
@@ -387,6 +389,108 @@ namespace {
         present(equivalent_dc);
         CHECK(opengl_test::state.read_calls == 1);
         CHECK(opengl_test::state.capture_enqueues == 1);
+    }
+
+    void test_released_dc_uses_recorded_window_and_live_paint_dc() {
+        const auto other_window = reinterpret_cast<HWND>(std::uintptr_t {0x77});
+        for (const auto stale_window : {static_cast<HWND>(nullptr), other_window}) {
+            reset_backend();
+            const auto context = opengl_test::state.current_context;
+            const auto original_dc = opengl_test::state.current_dc;
+            const auto paint_dc = reinterpret_cast<HDC>(std::uintptr_t {0x99});
+            const auto window = opengl_test::state.window;
+            CHECK(make_current_hook(original_dc, context) == TRUE);
+            CHECK(contexts.at(context).owner_window == window);
+            opengl_test::state.dc_windows[original_dc] = stale_window;
+            opengl_test::state.dc_windows[paint_dc] = window;
+            opengl_test::state.client_rect = {0, 0, 1080, 1920};
+            opengl_test::state.viewport[2] = 768;
+            opengl_test::state.viewport[3] = 1360;
+            GRAPHICS_WINDOW_BACKBUFFER_SCALE = true;
+
+            present(paint_dc);
+            clear_observations();
+            opengl_test::state.capture_requests.push_back(0);
+            present(paint_dc);
+            CHECK(opengl_test::state.draw_calls == 1);
+            CHECK(opengl_test::state.capture_enqueues == 1);
+            CHECK(opengl_test::state.last_capture_width == 1080);
+            CHECK(opengl_test::state.last_capture_height == 1920);
+            CHECK(opengl_test::state.drawn_sources.back().width == 768);
+            CHECK(opengl_test::state.drawn_sources.back().height == 1360);
+            CHECK(opengl_test::state.current_context == context);
+            CHECK(opengl_test::state.current_dc == paint_dc);
+            CHECK(contexts.at(context).owner_window == window);
+
+            opengl_test::state.dc_windows[paint_dc] = nullptr;
+            const auto next_paint_dc = reinterpret_cast<HDC>(std::uintptr_t {0x100});
+            opengl_test::state.dc_windows[next_paint_dc] = window;
+            opengl_test::state.capture_requests.push_back(0);
+            present(next_paint_dc);
+            CHECK(opengl_test::state.draw_calls == 2);
+            CHECK(opengl_test::state.capture_enqueues == 2);
+            CHECK(opengl_test::state.current_dc == next_paint_dc);
+        }
+    }
+
+    void test_tracked_context_follows_successful_window_binding() {
+        reset_backend();
+        const auto context = opengl_test::state.current_context;
+        const auto original_dc = opengl_test::state.current_dc;
+        const auto window = opengl_test::state.window;
+        const auto other_dc = reinterpret_cast<HDC>(std::uintptr_t {0x88});
+        const auto other_window = reinterpret_cast<HWND>(std::uintptr_t {0x77});
+        opengl_test::state.dc_windows[original_dc] = window;
+        opengl_test::state.dc_windows[other_dc] = other_window;
+        CHECK(make_current_hook(original_dc, context) == TRUE);
+        CHECK(make_current_hook(other_dc, context) == TRUE);
+        CHECK(contexts.at(context).owner_window == other_window);
+        clear_observations();
+        opengl_test::state.capture_requests.push_back(0);
+        present(original_dc);
+        CHECK(opengl_test::state.graphics_hook_calls == 0);
+        CHECK(opengl_test::state.capture_enqueues == 0);
+        CHECK(opengl_test::state.capture_requests.size() == 1);
+        CHECK(opengl_test::state.current_dc == other_dc);
+    }
+
+    void test_failed_bind_and_unbind_do_not_change_owner() {
+        reset_backend();
+        const auto context = opengl_test::state.current_context;
+        const auto dc = opengl_test::state.current_dc;
+        const auto window = opengl_test::state.window;
+        CHECK(make_current_hook(dc, context) == TRUE);
+        opengl_test::state.make_current_results.push_back(false);
+        CHECK(make_current_hook(nullptr, context) == FALSE);
+        CHECK(contexts.at(context).owner_window == window);
+        CHECK(make_current_hook(nullptr, nullptr) == TRUE);
+        CHECK(contexts.size() == 1);
+        CHECK(contexts.at(context).owner_window == window);
+    }
+
+    void test_same_handle_reused_for_another_window_is_rejected() {
+        reset_backend();
+        const auto context = opengl_test::state.current_context;
+        const auto dc = opengl_test::state.current_dc;
+        CHECK(make_current_hook(dc, context) == TRUE);
+        opengl_test::state.dc_windows[dc] = reinterpret_cast<HWND>(std::uintptr_t {0x77});
+        opengl_test::state.capture_requests.push_back(0);
+        present(dc);
+        CHECK(opengl_test::state.graphics_hook_calls == 0);
+        CHECK(opengl_test::state.capture_enqueues == 0);
+        CHECK(opengl_test::state.capture_requests.size() == 1);
+    }
+
+    void test_untracked_released_dc_is_not_assumed_to_match() {
+        reset_backend();
+        const auto paint_dc = reinterpret_cast<HDC>(std::uintptr_t {0x99});
+        opengl_test::state.dc_windows[opengl_test::state.current_dc] = nullptr;
+        opengl_test::state.dc_windows[paint_dc] = opengl_test::state.window;
+        opengl_test::state.capture_requests.push_back(0);
+        present(paint_dc);
+        CHECK(opengl_test::state.graphics_hook_calls == 0);
+        CHECK(opengl_test::state.capture_enqueues == 0);
+        CHECK(opengl_test::state.capture_requests.size() == 1);
     }
 
     BOOL WINAPI recursive_swap_buffers(HDC dc) {
@@ -481,6 +585,11 @@ namespace {
         {"nonzero_screen_is_skipped", test_nonzero_screen_is_skipped},
         {"context_delete_retains_state_on_failure", test_context_delete_retains_state_on_failure},
         {"same_context_equivalent_dc_is_processed", test_same_context_equivalent_dc_is_processed},
+        {"released_dc_uses_recorded_window_and_live_paint_dc", test_released_dc_uses_recorded_window_and_live_paint_dc},
+        {"tracked_context_follows_successful_window_binding", test_tracked_context_follows_successful_window_binding},
+        {"failed_bind_and_unbind_do_not_change_owner", test_failed_bind_and_unbind_do_not_change_owner},
+        {"same_handle_reused_for_another_window_is_rejected", test_same_handle_reused_for_another_window_is_rejected},
+        {"untracked_released_dc_is_not_assumed_to_match", test_untracked_released_dc_is_not_assumed_to_match},
         {"swap_layer_main_plane_and_reentrancy", test_swap_layer_main_plane_and_reentrancy},
         {"swap_buffers_reentrancy", test_swap_buffers_reentrancy},
         {"window_init_shared_hook_and_fullscreen_bounds", test_window_init_shared_hook_and_fullscreen_bounds},

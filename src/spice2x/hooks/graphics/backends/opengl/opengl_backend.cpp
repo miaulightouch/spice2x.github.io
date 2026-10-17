@@ -36,6 +36,7 @@ namespace {
 
     struct Context {
         HGLRC resize_context = nullptr;
+        HWND owner_window = nullptr;
         HWND window = nullptr;
         graphics::opengl::ImageResize image;
         GLenum buffer = 0;
@@ -105,23 +106,30 @@ namespace {
     void present(HDC dc) {
         const auto game_context = get_context();
         const auto game_dc = get_dc();
+        const HWND window = WindowFromDC(dc);
+        const HWND current_window = game_dc ? WindowFromDC(game_dc) : nullptr;
         static std::once_flag swapped;
         std::call_once(swapped, [&] {
-            log_info("graphics::opengl", "swap received: current context={}, current dc={}, resize settings={}",
-                    game_context != nullptr, game_dc != nullptr, cfg::SCREENRESIZE != nullptr);
+            log_info("graphics::opengl", "swap received: context={}, current dc={} (window={}), dc={} (window={})",
+                    fmt::ptr(game_context), fmt::ptr(game_dc), fmt::ptr(current_window),
+                    fmt::ptr(dc), fmt::ptr(window));
         });
-        if (!game_context || !game_dc || !cfg::SCREENRESIZE) return;
-        if (game_dc != dc && WindowFromDC(game_dc) != WindowFromDC(dc)) return;
+        if (!game_context || !game_dc || !cfg::SCREENRESIZE || !window) return;
+        std::unique_lock lock(contexts_mutex);
+        auto &state = contexts[game_context];
+        // gftools releases its GetDC handle while the context stays current, then swaps a paint DC.
+        if (state.owner_window) {
+            if (state.owner_window != window) return;
+        } else if (game_dc != dc && current_window != window) {
+            return;
+        }
+        const HDC restore_dc = current_window == window ? game_dc : dc;
         static std::once_flag identified;
         std::call_once(identified, [] {
             log_info("graphics::opengl", "game context active: version={}, renderer={}",
                     reinterpret_cast<const char *>(gl.glGetString(GL_VERSION)),
                     reinterpret_cast<const char *>(gl.glGetString(GL_RENDERER)));
         });
-        const HWND window = WindowFromDC(dc);
-        if (!window) return;
-        std::unique_lock lock(contexts_mutex);
-        auto &state = contexts[game_context];
         if (state.window != window) {
             state.window = window;
             lock.unlock();
@@ -192,7 +200,7 @@ namespace {
             if (drawn && !pixels) gl.glFinish();
         }
         // wglMakeCurrent failure unbinds the old context, so restore it on BOTH paths.
-        const bool restored = make_current(game_dc, game_context);
+        const bool restored = make_current(restore_dc, game_context);
         if ((!switched || (resize && !drawn) || ((screenshot || capture) && !pixels) || !restored) && !state.warned) {
             log_warning("graphics::opengl", "frame processing failed (switched={}, drawn={}, restored={}, error={})",
                     switched, drawn, restored, GetLastError());
@@ -239,6 +247,20 @@ namespace {
         if (planes & WGL_SWAP_MAIN_PLANE) process_frame(dc);
         const auto result = swap_layers(dc, planes);
         in_swap = false;
+        return result;
+    }
+
+    BOOL WINAPI make_current_hook(HDC dc, HGLRC context) {
+        const auto result = make_current(dc, context);
+        if (result && context) {
+            const auto window = dc ? WindowFromDC(dc) : nullptr;
+            try {
+                std::lock_guard lock(contexts_mutex);
+                contexts[context].owner_window = window;
+            } catch (...) {
+                log_warning("graphics::opengl", "unable to record context window");
+            }
+        }
         return result;
     }
 
@@ -293,6 +315,9 @@ void graphics_opengl_init() {
     }
     // Some engines use wglSwapLayerBuffers rather than GDI SwapBuffers.
     if (swap_layers) detour::trampoline_try("opengl32.dll", "wglSwapLayerBuffers", swap_layers_hook, &swap_layers);
+    if (!detour::trampoline_try("opengl32.dll", "wglMakeCurrent", make_current_hook, &make_current)) {
+        log_warning("graphics::opengl", "unable to track context windows; released DC scaling may be unavailable");
+    }
     detour::trampoline_try("opengl32.dll", "wglDeleteContext", delete_context_hook, &delete_context);
     log_info("graphics::opengl", "legacy image resize hooks initialized");
 }
