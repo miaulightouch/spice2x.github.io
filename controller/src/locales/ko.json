@@ -130,8 +130,6 @@
   "cards.deleteLabel": "{name} 삭제",
   "cards.read": "기기 카드 읽기",
   "cards.fill": "번호 입력",
-  "cards.keypad": "키패드",
-  "cards.target": "P{n} 키패드로 전송",
   "connection.add": "기기 추가",
   "connection.name": "기기 이름",
   "connection.endpoint": "WebSocket 주소",

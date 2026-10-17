@@ -130,8 +130,6 @@
   "cards.deleteLabel": "Delete {name}",
   "cards.read": "Read cabinet cards",
   "cards.fill": "Use number",
-  "cards.keypad": "Keypad",
-  "cards.target": "Send to P{n} keypad",
   "connection.add": "Add cabinet",
   "connection.name": "Cabinet name",
   "connection.endpoint": "WebSocket endpoint",

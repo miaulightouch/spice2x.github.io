@@ -130,8 +130,6 @@
   "cards.deleteLabel": "{name} を削除",
   "cards.read": "筐体のカード設定を読む",
   "cards.fill": "番号を入力",
-  "cards.keypad": "テンキー",
-  "cards.target": "P{n} のテンキーへ送信",
   "connection.add": "筐体を追加",
   "connection.name": "筐体名",
   "connection.endpoint": "WebSocket アドレス",
