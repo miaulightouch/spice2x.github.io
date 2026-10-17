@@ -23,6 +23,7 @@ namespace api::modules {
         void read(Request &req, Response &res);
         void write(Request &req, Response &res);
         void write_reset(Request &req, Response &res);
+        void pulse(Request &req, Response &res);
 
         // helper
         void get_light(Light &light, Response &res);
