@@ -471,15 +471,15 @@ onBeforeUnmount(() => {
         </div>
       </section>
       <section v-show="tab === 'log'" class="log-panel" aria-labelledby="log-title">
-        <h2 id="log-title">{{ t('log.title') }}</h2>
-        <p class="small muted">{{ t('log.hint') }}</p>
-        <div class="button-row">
-          <button :disabled="!connected || !!busy" @click="c.readLog()">{{ t('log.refresh') }}</button>
-          <button :disabled="!connected || !!busy" @click="downloadLog()">{{ t('log.download') }}</button>
-          <span class="small muted">{{ t('log.size', { n: logSize }) }}</span>
+        <div class="page-title"><h1 id="log-title">{{ t('log.title') }}</h1><div class="button-row">
+          <button class="quiet compact" :disabled="!connected || !!busy" @click="c.readLog()">{{ t('log.refresh') }}</button>
+          <button class="quiet compact" :disabled="!connected || !!busy" @click="downloadLog()">{{ t('log.download') }}</button>
+        </div></div>
+        <div class="settings-panel">
+          <div class="feature-toolbar"><label class="stacked-field">{{ t('log.search') }}<input v-model="logSearch" type="search"></label><span class="small muted">{{ t('log.size', { n: logSize }) }}</span></div>
+          <p class="small muted">{{ t('log.hint') }}</p>
+          <pre tabindex="0" :aria-label="t('log.title')">{{ filteredLog || t('log.empty') }}</pre>
         </div>
-        <label class="stacked-field">{{ t('log.search') }}<input v-model="logSearch" type="search"></label>
-        <pre tabindex="0" :aria-label="t('log.title')">{{ filteredLog || t('log.empty') }}</pre>
       </section>
       <section v-show="tab === 'status'" aria-labelledby="status-title">
         <div class="page-title"><h1 id="status-title">{{ t('status.title') }}</h1><button class="quiet compact" :disabled="!!busy || !connected" @click="c.readStatus">{{ t('status.refresh') }}</button></div>
