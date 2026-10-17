@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t, msg, locale, languages, setLocale, LocalizedError } from './i18n';
-import { computed, onBeforeUnmount, reactive, ref, toRaw, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useController } from './useController';
 import { isRecord, normalizeEndpoint } from './api/client';
 import { defaultScene } from './api/resize';
@@ -10,6 +10,9 @@ import type { Locale } from './i18n';
 import type { Profile } from './storage';
 import { generateCardId } from './api/features';
 import type { ManagedCard, OptionField } from './api/features';
+import { clearOptionDraft as clearDraftState, clearOptionDraftTouches, isOptionDraftDirty, mergeOptionDraft, optionDraftChanges, prepareOptionGameChange, setOptionDraftValue } from './api/options';
+import type { OptionDraftState } from './api/options';
+import { cloneCardManagerCards, mergeCardManagerDraft } from './api/cardManagerDraft';
 
 const c = useController();
 const { status, demo, connected, busy, error, message, game, version, latency, memory, resize, resizeError,
@@ -41,7 +44,7 @@ const optionSearch = ref('');
 const optionShowHidden = ref(false);
 const optionDraft = reactive<Record<string, string>>({});
 const optionTouched = reactive<Record<string, boolean>>({});
-const optionDraftGame = ref('');
+const optionDraftState = reactive<OptionDraftState>({ game: '', revision: undefined, values: optionDraft, touched: optionTouched });
 const patchSearch = ref('');
 const managerDraft = ref<ManagedCard[]>([]);
 const managerActive = ref<[string, string]>(['', '']);
@@ -146,34 +149,19 @@ async function readCards(): Promise<void> {
     c.notify(msg(machineCards.value.length ? 'msg.cardsRead' : 'msg.noCards'));
   } catch (value) { c.report(value); }
 }
-const optionDirty = computed(() => Object.values(optionTouched).some(Boolean));
+const optionDirty = computed(() => isOptionDraftDirty(optionDraftState));
 function clearOptionDraft(): void {
-  for (const name of Object.keys(optionDraft)) delete optionDraft[name];
-  for (const name of Object.keys(optionTouched)) delete optionTouched[name];
-  optionDraftGame.value = ''; optionGame.value = '';
+  clearDraftState(optionDraftState); optionGame.value = '';
 }
 function syncOptionDraft(state = options.value): void {
-  if (!state) { clearOptionDraft(); return; }
-  if (optionDraftGame.value && optionDraftGame.value !== state.game) {
-    if (optionDirty.value) return;
-    clearOptionDraft();
-  }
-  optionDraftGame.value = state.game;
+  if (!mergeOptionDraft(optionDraftState, state)) return;
+  if (!state) { optionGame.value = ''; return; }
   optionGame.value = state.game;
-  for (const option of state.options) {
-    if (!optionTouched[option.name]) optionDraft[option.name] = option.value;
-    if (optionTouched[option.name] === undefined) optionTouched[option.name] = false;
-  }
 }
 watch(options, state => syncOptionDraft(state));
 watch(cardManager, state => {
-  if (!state) {
-    managerDraft.value = []; managerActive.value = ['', '']; managerBaseRevision.value = undefined;
-    return;
-  }
-  managerActive.value = [...state.active];
-  if (managerDirty.value) return;
-  managerDraft.value = structuredClone(toRaw(state.cards)); managerBaseRevision.value = state.revision;
+  const next = mergeCardManagerDraft({ cards: managerDraft.value, active: managerActive.value, revision: managerBaseRevision.value, dirty: managerDirty.value }, state);
+  managerDraft.value = next.cards; managerActive.value = next.active; managerBaseRevision.value = next.revision; managerDirty.value = next.dirty;
 }, { deep: true });
 watch(managerActive, active => {
   const id = active[unit.value];
@@ -198,25 +186,37 @@ const visiblePatches = computed(() => {
   return (patches.value?.patches ?? []).filter(p => !query || [p.name, p.id, p.group, p.description].some(text => text.toLowerCase().includes(query)));
 });
 async function openOptions(): Promise<void> { tab.value = 'settings'; if (!featureReady.value) return; await c.refreshGames(); await c.refreshOptions(optionGame.value || undefined); syncOptionDraft(); }
-async function selectOptionGame(): Promise<void> {
-  const previousGame = optionDraftGame.value || options.value?.game || '';
-  if (previousGame && previousGame !== optionGame.value && optionDirty.value) {
-    if (!window.confirm(t('options.discardConfirm'))) { optionGame.value = previousGame; return; }
+async function reloadOptions(): Promise<void> {
+  const targetGame = optionDraftState.game || optionGame.value || options.value?.game || games.value?.current;
+  if (optionDirty.value) {
+    if (!window.confirm(t('options.discardConfirm'))) return;
     clearOptionDraft();
   }
-  await c.refreshOptions(optionGame.value); syncOptionDraft();
+  await c.refreshOptions(targetGame);
+  syncOptionDraft();
+}
+async function selectOptionGame(): Promise<void> {
+  const requestedGame = optionGame.value;
+  const stateGame = optionDraftState.game || options.value?.game || '';
+  if (!optionDraftState.game && stateGame) optionDraftState.game = stateGame;
+  const change = prepareOptionGameChange(optionDraftState, requestedGame, () => window.confirm(t('options.discardConfirm')));
+  if (!change.accepted) { optionGame.value = change.game; return; }
+  optionGame.value = change.game;
+  await c.refreshOptions(change.game); syncOptionDraft();
 }
 async function saveOptionDraft(): Promise<void> {
   if (!options.value) return;
-  const changes = options.value.options.filter(option => optionTouched[option.name] && optionDraft[option.name] !== undefined)
-    .map(option => ({ name: option.name, value: optionDraft[option.name]! }));
-  if (changes.length && await c.saveOptions(changes)) {
-    for (const change of changes) optionTouched[change.name] = false;
+  const changes = optionDraftChanges(optionDraftState, options.value.options);
+  if (changes.length && await c.saveOptions(changes, optionDraftState.revision)) {
+    clearOptionDraftTouches(optionDraftState, changes);
     syncOptionDraft();
   }
 }
 function markOption(name: string): void { optionTouched[name] = true; }
-function optionInputType(option: OptionField): string { return option.type === 'integer' ? 'number' : 'text'; }
+function setOptionValue(name: string, event: Event): void {
+  setOptionDraftValue(optionDraftState, name, (event.target as HTMLInputElement).value);
+}
+function optionInputType(option: OptionField): string { return option.sensitive ? 'password' : 'text'; }
 function optionColor(card: ManagedCard): string { return '#' + card.color.map(value => Math.round(Math.max(0, Math.min(1, value)) * 255).toString(16).padStart(2, '0')).join(''); }
 function setManagerColor(card: ManagedCard, event: Event): void {
   const value = (event.target as HTMLInputElement).value.slice(1);
@@ -235,23 +235,38 @@ function moveManagerCard(index: number, direction: -1 | 1): void {
 }
 async function saveManager(): Promise<void> {
   try {
-    const cards = managerDraft.value.map(card => ({ ...card, id: normalizeCard(card.id) }));
+    const cards = cloneCardManagerCards(managerDraft.value).map(card => ({ ...card, id: normalizeCard(card.id) }));
     const revision = managerBaseRevision.value;
     if (revision === undefined) return;
     if (await c.saveCardManager(cards, revision)) {
       managerDirty.value = false;
       if (cardManager.value) {
-        managerDraft.value = structuredClone(toRaw(cardManager.value.cards));
-        managerActive.value = [...cardManager.value.active]; managerBaseRevision.value = cardManager.value.revision;
+        const next = mergeCardManagerDraft({ cards: managerDraft.value, active: managerActive.value, revision: managerBaseRevision.value, dirty: false }, cardManager.value);
+        managerDraft.value = next.cards; managerActive.value = next.active; managerBaseRevision.value = next.revision;
       }
     }
   } catch (value) { c.report(value); }
 }
+async function loadManager(): Promise<void> {
+  if (managerDirty.value && !window.confirm(t('cards.managerDiscardConfirm'))) return;
+  managerDraft.value = []; managerActive.value = ['', '']; managerBaseRevision.value = undefined; managerDirty.value = false;
+  await c.refreshCardManager();
+}
 async function setActiveReader(reader: 0 | 1, event: Event): Promise<void> {
   const id = (event.target as HTMLSelectElement).value;
-  managerActive.value[reader] = id;
-  if (id) cardNumber.value = id;
-  await c.setManagerActive(reader, id);
+  if (await c.setManagerActive(reader, id)) {
+    managerActive.value[reader] = id;
+    if (id) cardNumber.value = id;
+  } else (event.target as HTMLSelectElement).value = managerActive.value[reader];
+}
+function setPatchInteger(id: string, event: Event): void {
+  const patch = patches.value?.patches.find(item => item.id === id);
+  if (!patch || patch.status !== 'enabled' || patch.unverified || patch.value === undefined) return;
+  const raw = (event.target as HTMLInputElement).value;
+  if (!raw) return;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || (patch.min !== undefined && value < patch.min) || (patch.max !== undefined && value > patch.max)) return;
+  void c.setPatch(id, { enabled: true, value });
 }
 function ensureIoPolling(): void { if (tab.value === 'io') c.startIoPolling(); else c.stopIoPolling(); }
 watch(tab, ensureIoPolling);
@@ -313,12 +328,12 @@ onBeforeUnmount(() => {
     </nav>
     <main class="main-content">
       <section v-show="tab === 'settings'" aria-labelledby="options-title">
-        <div class="page-title"><h1 id="options-title">{{ t('options.title') }}</h1><div class="button-row"><select v-if="games" v-model="optionGame" :aria-label="t('options.game')" :disabled="!featureReady" @change="selectOptionGame"><option v-for="name in games.games" :key="name" :value="name">{{ name }}</option></select><button class="quiet compact" :disabled="!!busy || !featureReady" @click="c.refreshOptions(optionGame || undefined)">{{ t('options.reload') }}</button></div></div>
+        <div class="page-title"><h1 id="options-title">{{ t('options.title') }}</h1><div class="button-row"><select v-if="games" v-model="optionGame" :aria-label="t('options.game')" :disabled="!featureReady || !!busy" @change="selectOptionGame"><option v-for="name in games.games" :key="name" :value="name">{{ name }}</option></select><button class="quiet compact" :disabled="!!busy || !featureReady" @click="reloadOptions">{{ t('options.reload') }}</button></div></div>
         <div v-if="featureErrors.options" class="empty-state"><h2>{{ t('options.unavailable') }}</h2><p>{{ featureErrors.options }}</p><button @click="openOptions">{{ t('options.retry') }}</button></div>
         <div v-else-if="!options" class="empty-state"><h2>{{ t('options.loading') }}</h2><p>{{ t('options.hint') }}</p><p v-if="connected && !featureReady" class="muted small">{{ t('options.passwordHint') }}</p><button :disabled="!featureReady || !!busy" @click="openOptions">{{ t('options.load') }}</button></div>
         <template v-else>
-          <div class="settings-panel feature-toolbar"><label class="stacked-field">{{ t('options.search') }}<input v-model="optionSearch" type="search"></label><label class="check"><input v-model="optionShowHidden" type="checkbox">{{ t('options.showHidden') }}</label><span class="muted small">{{ options.restart_required ? t('options.restartHint') : t('options.liveHint') }}</span></div>
-          <div v-for="[category, fields] in optionGroups" :key="category" class="settings-panel feature-group"><h2>{{ category }}</h2><div v-for="option in fields" :key="option.name" class="feature-field"><div class="field-header"><label :for="'option-' + option.name">{{ option.title }}</label><span v-if="option.sensitive" class="muted small">{{ t('options.sensitive') }}</span></div><p v-if="option.description" class="muted small">{{ option.description }}</p><label v-if="option.type === 'bool'" class="check"><input :id="'option-' + option.name" type="checkbox" :checked="optionDraft[option.name] !== ''" :disabled="option.disabled" @change="optionDraft[option.name] = ($event.target as HTMLInputElement).checked ? '/ENABLED' : ''; markOption(option.name)">{{ optionDraft[option.name] !== '' ? t('options.on') : t('options.off') }}</label><select v-else-if="option.type === 'enum'" :id="'option-' + option.name" v-model="optionDraft[option.name]" :disabled="option.disabled" @change="markOption(option.name)"><option value="">{{ t('options.default') }}</option><option v-for="element in option.elements" :key="element.value" :value="element.value">{{ element.label || element.value }}</option></select><input v-else :id="'option-' + option.name" v-model="optionDraft[option.name]" :type="optionInputType(option)" :disabled="option.disabled" :placeholder="option.sensitive ? t('options.sensitivePlaceholder') : ''" @input="markOption(option.name)"><span v-if="option.hidden" class="muted small">{{ t('options.hidden') }}</span></div></div>
+          <div class="settings-panel feature-toolbar"><label class="stacked-field">{{ t('options.search') }}<input v-model="optionSearch" type="search" :disabled="!!busy"></label><label class="check"><input v-model="optionShowHidden" type="checkbox" :disabled="!!busy">{{ t('options.showHidden') }}</label><span class="muted small">{{ options.restart_required ? t('options.restartHint') : t('options.liveHint') }}</span></div>
+          <div v-for="[category, fields] in optionGroups" :key="category" class="settings-panel feature-group"><h2>{{ category }}</h2><div v-for="option in fields" :key="option.name" class="feature-field"><div class="field-header"><label :for="'option-' + option.name">{{ option.title }}</label><span v-if="option.sensitive" class="muted small">{{ t('options.sensitive') }}</span></div><p v-if="option.description" class="muted small">{{ option.description }}</p><label v-if="option.type === 'bool'" class="check"><input :id="'option-' + option.name" type="checkbox" :checked="optionDraft[option.name] !== ''" :disabled="option.disabled || !!busy" @change="optionDraft[option.name] = ($event.target as HTMLInputElement).checked ? '/ENABLED' : ''; markOption(option.name)">{{ optionDraft[option.name] !== '' ? t('options.on') : t('options.off') }}</label><select v-else-if="option.type === 'enum'" :id="'option-' + option.name" v-model="optionDraft[option.name]" :disabled="option.disabled || !!busy" @change="markOption(option.name)"><option value="">{{ t('options.default') }}</option><option v-for="element in option.elements" :key="element.value" :value="element.value">{{ element.label || element.value }}</option></select><input v-else :id="'option-' + option.name" :value="optionDraft[option.name]" :type="optionInputType(option)" :inputmode="option.type === 'integer' ? 'numeric' : undefined" :autocomplete="option.sensitive ? 'off' : undefined" :disabled="option.disabled || !!busy" :placeholder="option.sensitive ? t('options.sensitivePlaceholder') : ''" @input="setOptionValue(option.name, $event)"><span v-if="option.hidden" class="muted small">{{ t('options.hidden') }}</span></div></div>
           <div class="panel-actions"><button class="primary" :disabled="!!busy || !featureReady" @click="saveOptionDraft">{{ t('options.save') }}</button><span class="muted small">{{ t('options.revision', { n: options.revision }) }}</span></div>
         </template>
       </section>
@@ -326,7 +341,7 @@ onBeforeUnmount(() => {
         <div class="page-title"><h1 id="patches-title">{{ t('patches.title') }}</h1><div class="button-row"><button class="quiet compact" :disabled="!!busy || !featureReady" @click="c.reloadPatches">{{ t('patches.reload') }}</button><button class="primary compact" :disabled="!!busy || !featureReady || !patches?.dirty" @click="c.savePatches()">{{ t('patches.save') }}</button></div></div>
         <div v-if="featureErrors.patches" class="empty-state"><h2>{{ t('patches.unavailable') }}</h2><p>{{ featureErrors.patches }}</p><button @click="openPatches">{{ t('patches.retry') }}</button></div>
         <div v-else-if="!patches" class="empty-state"><h2>{{ t('patches.loading') }}</h2><p v-if="connected && !featureReady" class="muted small">{{ t('patches.passwordHint') }}</p><button :disabled="!featureReady || !!busy" @click="openPatches">{{ t('patches.load') }}</button></div>
-        <template v-else><div class="settings-panel feature-toolbar"><label class="stacked-field">{{ t('patches.search') }}<input v-model="patchSearch" type="search"></label><label class="check"><input type="checkbox" :checked="patches.auto_apply" :disabled="!!busy || !featureReady" @change="c.setPatchAutoApply(($event.target as HTMLInputElement).checked)">{{ t('patches.autoApply') }}</label><span class="muted small" v-if="patches.standalone">{{ t('patches.standalone') }}</span></div><div v-for="patch in visiblePatches" :key="patch.id" class="settings-panel feature-field"><div class="field-header"><label class="check"><input type="checkbox" :checked="patch.enabled" :disabled="patch.status === 'error' || !!busy || !featureReady" @change="c.setPatch(patch.id, { enabled: ($event.target as HTMLInputElement).checked })">{{ patch.name }}</label><span class="muted small">{{ patch.group }}</span><span v-if="patch.unverified" class="caution">{{ t('patches.unverified') }}</span></div><p class="muted small">{{ patch.description }}</p><p v-if="patch.caution" class="caution">{{ patch.caution }}</p><p v-if="patch.error" class="error-text">{{ patch.error }}</p><select v-if="patch.choices.length" :value="patch.selected" :disabled="!!busy || !featureReady" @change="c.setPatch(patch.id, { choice: ($event.target as HTMLSelectElement).value })"><option v-for="choice in patch.choices" :key="choice" :value="choice">{{ choice }}</option></select><input v-if="patch.type === 'integer'" type="number" :min="patch.min" :max="patch.max" :value="patch.value" :disabled="!!busy || !featureReady" @change="c.setPatch(patch.id, { value: Number(($event.target as HTMLInputElement).value) })"></div></template>
+        <template v-else><div class="settings-panel feature-toolbar"><label class="stacked-field">{{ t('patches.search') }}<input v-model="patchSearch" type="search"></label><label class="check"><input type="checkbox" :checked="patches.auto_apply" :disabled="!!busy || !featureReady" @change="c.setPatchAutoApply(($event.target as HTMLInputElement).checked)">{{ t('patches.autoApply') }}</label><span class="muted small" v-if="patches.standalone">{{ t('patches.standalone') }}</span></div><div v-for="patch in visiblePatches" :key="patch.id" class="settings-panel feature-field"><div class="field-header"><label class="check"><input type="checkbox" :checked="patch.status === 'enabled'" :disabled="patch.status === 'error' || !!busy || !featureReady" @change="c.setPatch(patch.id, { enabled: ($event.target as HTMLInputElement).checked })">{{ patch.name }}</label><span class="muted small">{{ patch.group }}</span><span v-if="patch.unverified" class="caution">{{ t('patches.unverified') }}</span></div><p class="muted small">{{ patch.description }}</p><p v-if="patch.caution" class="caution">{{ patch.caution }}</p><p v-if="patch.error" class="error-text">{{ patch.error }}</p><select v-if="patch.choices.length" :value="patch.selected" :disabled="patch.status !== 'enabled' || patch.unverified || !!busy || !featureReady" @change="c.setPatch(patch.id, { enabled: true, choice: ($event.target as HTMLSelectElement).value })"><option v-for="choice in patch.choices" :key="choice" :value="choice">{{ choice }}</option></select><input v-if="patch.type === 'integer'" type="number" :min="patch.min" :max="patch.max" :value="patch.value ?? ''" :disabled="patch.status !== 'enabled' || patch.unverified || patch.value === undefined || !!busy || !featureReady" @change="setPatchInteger(patch.id, $event)"></div></template>
       </section>
       <section v-show="tab === 'io'" aria-labelledby="io-title">
         <div class="page-title"><h1 id="io-title">{{ t('io.title') }}</h1><div class="button-row"><button class="quiet compact" :disabled="!!busy || !connected" @click="c.readIo">{{ t('io.refresh') }}</button><button class="quiet compact" :disabled="!!busy || !connected" @click="c.resetIo()">{{ t('io.reset') }}</button></div></div>
@@ -377,7 +392,7 @@ onBeforeUnmount(() => {
           <div class="saved-cards"><h2>{{ t('cards.mine') }}</h2><p class="muted small" v-if="!cards.length">{{ t('cards.localHint') }}</p><div v-for="card in cards" :key="card.id" class="saved-card"><div><strong>{{ card.name }}</strong><code>{{ card.number.match(/.{1,4}/g)?.join(' ') }}</code></div><div class="button-row"><button :disabled="!connected || !!busy" @click="insert(card.number)">{{ t('cards.use') }}</button><button class="quiet" :aria-label="t('cards.deleteLabel', { name: card.name })" @click="removeCard(card.id)">{{ t('cards.delete') }}</button></div></div></div>
           <button class="text-button" :disabled="!connected || (!demo && !configuredPassword)" @click="readCards">{{ t('cards.read') }}</button><div v-for="card in machineCards" :key="card.index" class="machine-card"><span>P{{ card.index + 1 }} · {{ card.card_id }}</span><button class="quiet compact" @click="cardNumber = card.card_id">{{ t('cards.fill') }}</button></div>
         </div></div>
-        <div class="settings-panel manager-panel"><div class="section-toolbar"><h2>{{ t('cards.manager') }}</h2><div class="button-row"><button class="quiet compact" :disabled="!!busy || !featureReady" @click="c.refreshCardManager">{{ t('cards.managerLoad') }}</button><button class="primary compact" :disabled="!!busy || !featureReady || !managerDirty || managerBaseRevision === undefined" @click="saveManager">{{ t('cards.managerSave') }}</button></div></div><div v-if="featureErrors.manager" class="empty-state"><p>{{ featureErrors.manager }}</p><button :disabled="!featureReady" @click="c.refreshCardManager">{{ t('cards.managerRetry') }}</button></div><template v-else-if="cardManager"><div v-for="reader in [0,1] as const" :key="reader" class="stacked-field"><label>{{ t('cards.activeReader', { n: reader + 1 }) }}<select :value="managerActive[reader]" :disabled="!!busy || !featureReady" @change="setActiveReader(reader, $event)"><option value="">{{ t('cards.noActive') }}</option><option v-for="(card, index) in managerDraft" :key="card.id + '-' + index" :value="card.id">{{ card.name }} · {{ card.id }}</option></select></label><button v-if="managerActive[reader]" class="quiet compact" :disabled="!!busy || !connected" @click="insert(managerActive[reader], reader)">{{ t('cards.managerInsert') }}</button></div><div v-for="(card, index) in managerDraft" :key="card.id + '-' + index" class="manager-card"><input v-model="card.name" :aria-label="t('cards.cardName')" maxlength="256" @input="managerDirty = true"><input v-model="card.id" :aria-label="t('cards.cardId')" maxlength="16" autocapitalize="characters" @input="managerDirty = true"><input type="color" :value="optionColor(card)" :aria-label="t('cards.cardColor')" @input="setManagerColor(card, $event)"><div class="button-row"><button class="quiet compact" :disabled="index === 0" @click="moveManagerCard(index, -1)">↑</button><button class="quiet compact" :disabled="index === managerDraft.length - 1" @click="moveManagerCard(index, 1)">↓</button><button class="quiet compact" @click="deleteManagerCard(index)">{{ t('cards.delete') }}</button></div></div><div class="panel-actions"><button :disabled="!featureReady || managerBaseRevision === undefined" @click="addManagerCard">{{ t('cards.managerAdd') }}</button><span class="muted small">{{ t('cards.managerRevision', { n: cardManager.revision }) }}</span></div></template><p v-else class="muted small">{{ t('cards.managerHint') }}</p></div>
+        <div class="settings-panel manager-panel"><div class="section-toolbar"><h2>{{ t('cards.manager') }}</h2><div class="button-row"><button class="quiet compact" :disabled="!!busy || !featureReady" @click="loadManager">{{ t(managerDirty ? 'cards.managerDiscard' : 'cards.managerLoad') }}</button><button class="primary compact" :disabled="!!busy || !featureReady || !managerDirty || managerBaseRevision === undefined" @click="saveManager">{{ t('cards.managerSave') }}</button></div></div><div v-if="featureErrors.manager" class="empty-state"><p>{{ featureErrors.manager }}</p><button :disabled="!featureReady" @click="loadManager">{{ t('cards.managerRetry') }}</button></div><template v-else-if="cardManager"><div v-for="reader in [0,1] as const" :key="reader" class="stacked-field"><label>{{ t('cards.activeReader', { n: reader + 1 }) }}<select :value="managerActive[reader]" :disabled="!!busy || !featureReady" @change="setActiveReader(reader, $event)"><option value="">{{ t('cards.noActive') }}</option><option v-for="(card, index) in managerDraft" :key="card.id + '-' + index" :value="card.id">{{ card.name }} · {{ card.id }}</option></select></label><button v-if="managerActive[reader]" class="quiet compact" :disabled="!!busy || !connected" @click="insert(managerActive[reader], reader)">{{ t('cards.managerInsert', { n: reader + 1 }) }}</button></div><div v-for="(card, index) in managerDraft" :key="card.id + '-' + index" class="manager-card"><input v-model="card.name" :aria-label="t('cards.cardName')" maxlength="256" :disabled="!!busy" @input="managerDirty = true"><input v-model="card.id" :aria-label="t('cards.cardId')" maxlength="16" autocapitalize="characters" :disabled="!!busy" @input="managerDirty = true"><input type="color" :value="optionColor(card)" :aria-label="t('cards.cardColor')" :disabled="!!busy" @input="setManagerColor(card, $event)"><div class="button-row"><button class="quiet compact" :disabled="index === 0 || !!busy" @click="moveManagerCard(index, -1)">↑</button><button class="quiet compact" :disabled="index === managerDraft.length - 1 || !!busy" @click="moveManagerCard(index, 1)">↓</button><button class="quiet compact" :disabled="!!busy" @click="deleteManagerCard(index)">{{ t('cards.delete') }}</button></div></div><div class="panel-actions"><button :disabled="!featureReady || managerBaseRevision === undefined || !!busy" @click="addManagerCard">{{ t('cards.managerAdd') }}</button><span class="muted small">{{ t('cards.managerRevision', { n: cardManager.revision }) }}</span></div></template><p v-else class="muted small">{{ t('cards.managerHint') }}</p></div>
       </section>
       <section v-show="tab === 'keypad'" aria-labelledby="keypad-title">
         <div class="page-title"><h1 id="keypad-title">{{ t('nav.keypad') }}</h1><label class="inline-field">{{ t('cards.reader') }}<select v-model.number="unit"><option :value="0">P1</option><option :value="1">P2</option></select></label></div>

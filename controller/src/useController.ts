@@ -406,12 +406,13 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     } catch (value) { featureFailure('options', value, request); }
   }
 
-  async function saveOptions(changes: Array<{ name: string; value: string }>): Promise<boolean> {
+  async function saveOptions(changes: Array<{ name: string; value: string }>, expectedRevision?: number): Promise<boolean> {
     return action('options-save', async () => {
       const current = options.value;
       if (!current) throw new LocalizedError('error.featureUnavailable');
       const { rpc, epoch } = featureRpc('options-write');
-      const fresh = parseOptions(await rpc.request('config', 'set_options', [current.game, current.revision, changes]));
+      const revision = expectedRevision ?? current.revision;
+      const fresh = parseOptions(await rpc.request('config', 'set_options', [current.game, revision, changes]));
       if (epoch !== generation) return;
       options.value = fresh; featureErrors.value = { ...featureErrors.value, options: '' };
       notify(msg('msg.optionsSaved'));
@@ -488,8 +489,8 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     });
   }
 
-  async function setManagerActive(reader: 0 | 1, id: string): Promise<void> {
-    await action('manager-active', async () => {
+  async function setManagerActive(reader: 0 | 1, id: string): Promise<boolean> {
+    return action('manager-active', async () => {
       const { rpc, epoch } = featureRpc('manager-active');
       const value = parseCardManager(await rpc.request('card', 'manager_set_active', [reader, id]));
       if (epoch !== generation) return;

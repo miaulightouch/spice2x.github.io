@@ -74,7 +74,7 @@ export class DemoApi implements Rpc {
     }
     if (module === 'config') {
       if (fn === 'get_games') return [{ current: 'DEMO', games: ['DEMO'] }];
-      if (fn === 'get_options') return [{ game: String(params[0] ?? 'DEMO'), revision: this.optionRevision, restart_required: false,
+      if (fn === 'get_options') return [{ game: String(params[0] ?? 'DEMO'), revision: this.optionRevision, restart_required: true,
         options: [{ name: 'demo-enabled', title: 'Demo option', description: 'A safe demo option.', category: 'Demo', type: 'bool',
           value: this.optionValues.get('demo-enabled') ?? '', sensitive: false, has_value: !!this.optionValues.get('demo-enabled'),
           hidden: false, disabled: false, elements: [] }] }];

@@ -220,7 +220,7 @@ export function parsePatches(data: unknown[]): PatchState {
         value: optionalPatchInteger(raw.value, `patches[${index}].value`),
       };
       if (patch.min !== undefined && patch.max !== undefined && patch.min > patch.max) return fail(`Invalid patch range ${index}`);
-      if (patch.value !== undefined && ((patch.min !== undefined && patch.value < patch.min) || (patch.max !== undefined && patch.value > patch.max))) {
+      if (!patch.unverified && patch.status !== 'error' && patch.value !== undefined && ((patch.min !== undefined && patch.value < patch.min) || (patch.max !== undefined && patch.value > patch.max))) {
         return fail(`Invalid patch value ${index}`);
       }
       return patch;

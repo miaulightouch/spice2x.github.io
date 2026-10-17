@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseCardManager, parseGames, parseIoAnalogs, parseIoButtons, parseIoLights, parseOptions, parsePatches, generateCardId } from '../src/api/features';
+import { mergeOptionDraft, optionDraftChanges, setOptionDraftValue } from '../src/api/options';
+import type { OptionDraftState } from '../src/api/options';
+import { cloneCardManagerCards, mergeCardManagerDraft } from '../src/api/cardManagerDraft';
+import { reactive } from 'vue';
+import type { OptionsState } from '../src/api/features';
 import type { Rpc } from '../src/api/client';
 import { useController } from '../src/useController';
 
@@ -18,6 +23,7 @@ class FeatureRpc implements Rpc {
   readonly pulses: unknown[][] = [];
   managerRevision = 1;
   managerSaveRevision?: number;
+  failManagerActive = false;
   ioReadDelay = 0;
   private activeIoReads = 0;
   maxIoReads = 0;
@@ -48,7 +54,10 @@ class FeatureRpc implements Rpc {
     }
     if (module === 'patches' && fn === 'get') return [{ game: 'A', auto_apply: false, dirty: false, standalone: false, patches: [] }];
     if (module === 'card' && fn === 'manager_get') return [{ revision: this.managerRevision, cards: [{ name: 'A', id: 'E004000000000001', color: [0.1, 0.2, 0.3] }], active: ['', ''] }];
-    if (module === 'card' && fn === 'manager_set_active') return [{ revision: ++this.managerRevision, cards: [{ name: 'A', id: 'E004000000000001', color: [0.1, 0.2, 0.3] }], active: [String(params[1] ?? ''), ''] }];
+    if (module === 'card' && fn === 'manager_set_active') {
+      if (this.failManagerActive) throw new Error('active failed');
+      return [{ revision: ++this.managerRevision, cards: [{ name: 'A', id: 'E004000000000001', color: [0.1, 0.2, 0.3] }], active: [String(params[1] ?? ''), ''] }];
+    }
     if (module === 'card' && fn === 'manager_save') {
       this.managerSaveRevision = Number(params[0]);
       if (this.managerSaveRevision !== this.managerRevision) throw new Error('revision conflict');
@@ -71,6 +80,20 @@ test('feature parsers validate native option and patch contracts', () => {
     status: 'enabled', error: '', unverified: false, choices: [], selected: '', min: 0, max: 10, value: 3,
   }] }]);
   assert.equal(patches.patches[0]!.value, 3);
+  const failedInteger = parsePatches([{ game: 'IIDX', auto_apply: false, dirty: false, standalone: false, patches: [
+    { id: 'bad-int', name: '', description: '', caution: '', group: '', type: 'integer', enabled: false, status: 'error', error: 'missing', unverified: false, choices: [], selected: '', min: 10, max: 20, value: 0 },
+    { id: 'usable', name: '', description: '', caution: '', group: '', type: 'memory', enabled: false, status: 'disabled', error: '', unverified: false, choices: [], selected: '' },
+  ] }]);
+  assert.equal(failedInteger.patches.length, 2);
+  const unverifiedInteger = parsePatches([{ game: 'IIDX', auto_apply: false, dirty: false, standalone: false, patches: [
+    { id: 'unknown-int', name: '', description: '', caution: '', group: '', type: 'integer', enabled: false, status: 'disabled', error: '', unverified: true, choices: [], selected: '', min: 10, max: 20, value: 0 },
+  ] }]);
+  assert.equal(unverifiedInteger.patches[0]!.value, 0);
+  const omittedInteger = parsePatches([{ game: 'IIDX', auto_apply: false, dirty: false, standalone: false, patches: [
+    { id: 'omitted-int', name: '', description: '', caution: '', group: '', type: 'integer', enabled: false, status: 'error', error: 'missing', unverified: true, choices: [], selected: '', min: 10, max: 20 },
+  ] }]);
+  assert.equal(omittedInteger.patches[0]!.value, undefined);
+  assert.equal(omittedInteger.patches[0]!.min, 10);
   assert.throws(() => parseOptions([{ game: 'IIDX', revision: 1, restart_required: false, options: [{ type: 'bad' }] }]));
   assert.throws(() => parseOptions([{ game: 'IIDX', revision: -1, restart_required: false, options: [] }]));
   assert.throws(() => parsePatches([{ game: 'IIDX', auto_apply: false, dirty: false, standalone: false, patches: [{ id: 'p', name: '', description: '', caution: '', group: '', type: 'integer', enabled: false, status: 'disabled', error: '', unverified: false, choices: [], selected: '', min: 4, max: 2, value: 3 }] }]));
@@ -90,6 +113,33 @@ test('card manager and I/O parsers preserve masked and numeric values', () => {
   assert.match(generateCardId(), /^[0-9A-F]{16}$/);
 });
 
+test('staged option draft keeps its values and base revision across refreshes', () => {
+  const draft: OptionDraftState = { game: '', revision: undefined, values: {}, touched: {} };
+  const snapshot = (game: string, revision: number, value: string): OptionsState => ({
+    game, revision, restart_required: true,
+    options: [{ name: 'mode', title: 'Mode', description: '', category: 'Game', type: 'text', value, sensitive: false, has_value: true, hidden: false, disabled: false, elements: [] }],
+  });
+  mergeOptionDraft(draft, snapshot('A', 7, 'server'));
+  setOptionDraftValue(draft, 'mode', 'staged');
+  mergeOptionDraft(draft, snapshot('A', 8, 'new-server'));
+  assert.equal(draft.values.mode, 'staged');
+  assert.equal(draft.revision, 7);
+  assert.deepEqual(optionDraftChanges(draft, snapshot('A', 8, 'new-server').options), [{ name: 'mode', value: 'staged' }]);
+});
+
+test('card manager draft clears on disconnect and clones reactive host cards', () => {
+  const cards = reactive([{ name: 'Host', id: 'E004000000000001', color: [0.1, 0.2, 0.3] as [number, number, number] }]);
+  const loaded = mergeCardManagerDraft({ cards: [], active: ['', ''], revision: undefined, dirty: false }, { revision: 4, cards, active: ['', ''] });
+  assert.equal(loaded.cards[0]!.name, 'Host');
+  const dirty = mergeCardManagerDraft({ ...loaded, dirty: true, cards: [{ ...loaded.cards[0]!, name: 'Staged' }] }, { revision: 5, cards, active: ['E004000000000001', ''] });
+  assert.equal(dirty.cards[0]!.name, 'Staged');
+  assert.equal(dirty.revision, 4);
+  assert.equal(dirty.active[0], 'E004000000000001');
+  const cleared = mergeCardManagerDraft(dirty);
+  assert.equal(cleared.dirty, false);
+  assert.equal(cleared.revision, undefined);
+});
+
 test('demo feature actions use the same RPC path and stop cleanly on disconnect', async () => {
   const controller = useController();
   try {
@@ -104,6 +154,15 @@ test('demo feature actions use the same RPC path and stop cleanly on disconnect'
     await controller.setPatch('demo-patch', { enabled: true });
     await controller.refreshCardManager();
     assert.equal(controller.cardManager.value?.cards[0]?.id, 'E004000000000001');
+    const draft = reactive(controller.cardManager.value!.cards.map(card => ({
+      name: card.name,
+      id: card.id,
+      color: [card.color[0], card.color[1], card.color[2]] as [number, number, number],
+    })));
+    draft[0]!.name = 'Saved demo card'; draft[0]!.color[0] = 0.77;
+    assert.equal(await controller.saveCardManager(cloneCardManagerCards(draft), controller.cardManager.value!.revision), true);
+    assert.equal(controller.cardManager.value?.cards[0]?.name, 'Saved demo card');
+    assert.equal(controller.cardManager.value?.cards[0]?.color[0], 0.77);
     await controller.readIo();
     assert.equal(controller.ioButtons.value[0]?.name, 'Service');
     await controller.testIo('analog', 'Demo knob', 0.75);
@@ -145,6 +204,17 @@ test('card manager saves use the immutable list revision across active refreshes
     const saved = await controller.saveCardManager([{ name: 'Edited', id: 'E004000000000001', color: [0.1, 0.2, 0.3] }], 1);
     assert.equal(saved, false);
     assert.equal(api.managerSaveRevision, 1);
+  } finally { controller.disconnect(); }
+});
+
+test('failed active-card override leaves the confirmed selection unchanged', async () => {
+  const api = new FeatureRpc();
+  const controller = useController(() => api);
+  try {
+    await controller.startDemo(); await controller.refreshCardManager();
+    api.failManagerActive = true;
+    assert.equal(await controller.setManagerActive(0, 'E004000000000001'), false);
+    assert.deepEqual(controller.cardManager.value?.active, ['', '']);
   } finally { controller.disconnect(); }
 });
 
