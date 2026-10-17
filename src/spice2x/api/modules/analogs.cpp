@@ -1,11 +1,17 @@
 #include "analogs.h"
+#include <chrono>
+#include <cmath>
+#include <cstring>
 #include <functional>
+#include <mutex>
+#include <thread>
 #include "external/rapidjson/document.h"
 #include "misc/eamuse.h"
 #include "cfg/analog.h"
 #include "launcher/launcher.h"
 #include "games/io.h"
 #include "util/utils.h"
+#include "util/scope_guard.h"
 #include "acio/mdxf/mdxf_poll.h"
 
 using namespace std::placeholders;
@@ -14,10 +20,26 @@ using namespace rapidjson;
 
 namespace api::modules {
 
+    namespace {
+        constexpr unsigned int DEFAULT_PULSE_MS = 180;
+        constexpr unsigned int MAX_PULSE_MS = 2000;
+        constexpr SizeType MAX_PULSE_NAME = 4096;
+        std::mutex ANALOGS_MUTEX;
+
+        bool read_pulse_name(const Value &value, std::string &name) {
+            if (!value.IsString() || value.GetStringLength() > MAX_PULSE_NAME) {
+                return false;
+            }
+            name.assign(value.GetString(), value.GetStringLength());
+            return name.find('\0') == std::string::npos;
+        }
+    }
+
     Analogs::Analogs() : Module("analogs") {
         functions["read"] = std::bind(&Analogs::read, this, _1, _2);
         functions["write"] = std::bind(&Analogs::write, this, _1, _2);
         functions["write_reset"] = std::bind(&Analogs::write_reset, this, _1, _2);
+        functions["pulse"] = std::bind(&Analogs::pulse, this, _1, _2);
         analogs = games::get_analogs(eamuse_get_game());
     }
 
@@ -25,6 +47,8 @@ namespace api::modules {
      * read()
      */
     void Analogs::read(api::Request &req, Response &res) {
+
+        std::lock_guard lock(ANALOGS_MUTEX);
 
         // check analog cache
         if (!analogs) {
@@ -48,6 +72,8 @@ namespace api::modules {
      * write([name: str, state: float], ...)
      */
     void Analogs::write(Request &req, Response &res) {
+
+        std::lock_guard lock(ANALOGS_MUTEX);
 
         // check analog cache
         if (!analogs)
@@ -91,6 +117,8 @@ namespace api::modules {
      * write_reset([name: str], ...)
      */
     void Analogs::write_reset(Request &req, Response &res) {
+
+        std::lock_guard lock(ANALOGS_MUTEX);
 
         // check analog cache
         if (!analogs)
@@ -136,6 +164,67 @@ namespace api::modules {
                 continue;
             }
         }
+    }
+
+    /**
+     * pulse(name: str, value: float, duration_ms: uint = 180)
+     * A single request owns the override and its restoration, so disconnects cannot leave it active.
+     */
+    void Analogs::pulse(Request &req, Response &res) {
+        if (req.params.Size() < 2 || req.params.Size() > 3) {
+            return error(res, "pulse expects [name, value, duration_ms]");
+        }
+
+        std::string analog_name;
+        if (!read_pulse_name(req.params[0], analog_name)) {
+            return error_type(res, "name", "string without embedded NUL");
+        }
+        if (!req.params[1].IsNumber()) {
+            return error_type(res, "value", "finite number between 0 and 1");
+        }
+        const auto value = req.params[1].GetDouble();
+        if (!std::isfinite(value) || value < 0.0 || value > 1.0) {
+            return error(res, "value must be a finite number between 0 and 1");
+        }
+
+        unsigned int duration = DEFAULT_PULSE_MS;
+        if (req.params.Size() == 3) {
+            if (!req.params[2].IsUint()) {
+                return error_type(res, "duration_ms", "uint");
+            }
+            duration = req.params[2].GetUint();
+        }
+        if (duration < 1 || duration > MAX_PULSE_MS) {
+            return error(res, "duration_ms must be between 1 and 2000");
+        }
+
+        std::lock_guard lock(ANALOGS_MUTEX);
+        if (!this->analogs) {
+            return error(res, "analogs unavailable");
+        }
+
+        Analog *target = nullptr;
+        for (auto &analog : *this->analogs) {
+            if (analog.getName() == analog_name) {
+                target = &analog;
+                break;
+            }
+        }
+        if (!target) {
+            return error_unknown(res, "analog", analog_name);
+        }
+
+        const auto previous_state = target->override_state;
+        const auto previous_enabled = target->override_enabled;
+        const auto restore = scope_guard{[target, previous_state, previous_enabled] {
+            target->override_state = previous_state;
+            target->override_enabled = previous_enabled;
+            mdxf_poll(true);
+        }};
+        target->override_state = static_cast<float>(value);
+        target->override_enabled = true;
+        mdxf_poll(true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(duration));
     }
 
     bool Analogs::write_analog(std::string name, float state) {

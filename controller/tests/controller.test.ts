@@ -105,14 +105,19 @@ test('card queries from a previous connection are discarded', async () => {
 
 test('passwords are persisted only with an explicit remember choice', () => {
   let saved = '';
-  const profiles = loadProfiles({ getItem: () => null });
+  const profiles = loadProfiles({ getItem: () => JSON.stringify([
+    { id: 'private', name: 'Private', endpoint: 'ws://127.0.0.1:1338', password: '', rememberPassword: false },
+    { id: 'remembered', name: 'Remembered', endpoint: 'ws://127.0.0.1:1339', password: '', rememberPassword: false },
+  ]) });
   profiles[0]!.password = 'private'; profiles[1]!.password = 'remembered'; profiles[1]!.rememberPassword = true;
   saveProfiles(profiles, { setItem: (_key, value) => { saved = value; } });
-  assert.equal(saved.includes('private'), false);
+  const stored = JSON.parse(saved) as Array<{ password: string }>;
+  assert.equal(stored[0]!.password, '');
+  assert.equal(stored[1]!.password, 'remembered');
   const restored = loadProfiles({ getItem: () => saved });
   assert.equal(restored[0]!.password, ''); assert.equal(restored[1]!.password, 'remembered');
-  assert.equal(loadProfiles({ getItem: () => '{broken' }).length, 2);
-  assert.equal(loadProfiles({ getItem: () => { throw new Error('storage blocked'); } }).length, 2);
+  assert.equal(loadProfiles({ getItem: () => '{broken' }).length, 0);
+  assert.equal(loadProfiles({ getItem: () => { throw new Error('storage blocked'); } }).length, 0);
 });
 
 test('card IDs are normalized and malformed values cannot be inserted', () => {

@@ -1,17 +1,14 @@
 #include <random>
+#include <algorithm>
 #include <games/io.h>
 #include "card_manager.h"
 
-#include "external/rapidjson/document.h"
-#include "external/rapidjson/prettywriter.h"
 #include "misc/eamuse.h"
 #include "misc/clipboard.h"
 #include "util/utils.h"
 #include "util/fileutils.h"
 #include "cfg/configurator.h"
 #include "overlay/imgui/extensions.h"
-
-using namespace rapidjson;
 
 namespace overlay::windows {
 
@@ -28,13 +25,6 @@ namespace overlay::windows {
         }
 
         this->toggle_button = games::OverlayButtons::ToggleCardManager;
-
-        bool file_exists = false;
-        this->config_path =
-            fileutils::get_config_file_path("cardmanager", "spicetools_card_manager.json", &file_exists);
-        if (file_exists) {
-            this->config_load();
-        }
 
         // load -card0 / -card1
         // -card0 / -card1 override
@@ -69,6 +59,30 @@ namespace overlay::windows {
     }
 
     void CardManager::build_content() {
+        std::lock_guard<std::recursive_mutex> lock(store.mutex);
+        if (!store.load_error.empty()) {
+            ImGui::TextUnformatted(store.load_error.c_str());
+            return;
+        }
+        const bool cards_changed = seen_revision != store.revision;
+        if (cards_changed) {
+            current_card = nullptr;
+            editor_stale = true;
+            seen_revision = store.revision;
+        }
+        for (size_t i = 0; i < 2; i++) {
+            const auto id = eamuse_get_card_override(i);
+            if (id.empty()) {
+                loaded_card[i].reset();
+                continue;
+            }
+            if (!cards_changed && loaded_card[i] && loaded_card[i]->id == id) continue;
+            const auto entry = std::find_if(cards.begin(), cards.end(), [&](const auto &card) { return card.id == id; });
+            if (entry != cards.end()) loaded_card[i] = *entry;
+            else if (!loaded_card[i] || loaded_card[i]->id != id) {
+                loaded_card[i] = CardEntry { .name = "Override", .id = id, .read_only = true, .color = {0.9f, 0.9f, 0.9f} };
+            }
+        }
         ImGui::TextColored(ImVec4(1, 0.7f, 0, 1), "Active card overrides");
         ImGui::SameLine();
         ImGui::HelpMarker(
@@ -104,6 +118,7 @@ namespace overlay::windows {
         build_footer();
 
         build_card_editor();
+        seen_revision = store.revision;
     }
 
     bool CardManager::build_card(int reader) {
@@ -150,6 +165,7 @@ namespace overlay::windows {
     }
 
     void CardManager::open_card_editor() {
+        editor_stale = false;
         if (this->current_card) {
             const auto card = this->current_card;
             snprintf(this->name_buffer, std::size(this->name_buffer), "%s", card->name.c_str());
@@ -164,6 +180,11 @@ namespace overlay::windows {
     void CardManager::build_card_editor() {
         // new/edit card popup
         if (ImGui::BeginPopupModal("Card Editor", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            if (editor_stale) {
+                ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+                return;
+            }
             // card ID field (only editable for new cards)
             ImGui::BeginDisabled(this->current_card);
             ImGui::InputTextWithHint("Card ID", "E0040100FFFFFFFF",
@@ -214,7 +235,6 @@ namespace overlay::windows {
                             !this->loaded_card[i].value().read_only &&
                             this->loaded_card[i].value().id == this->current_card->id) {
                             this->loaded_card[i] = *this->current_card;
-                            break;
                         }
                     }
 
@@ -363,7 +383,7 @@ namespace overlay::windows {
                     if (&*it == this->current_card && it != this->cards.begin()) {
                         std::iter_swap(it, it - 1);
                         this->current_card = &*(it - 1);
-                        this->config_dirty = true;
+                        store.changed();
                         break;
                     }
                 }
@@ -374,7 +394,7 @@ namespace overlay::windows {
                     if (&*it == this->current_card && (it + 1) != this->cards.end()) {
                         std::iter_swap(it, it + 1);
                         this->current_card = &*(it + 1);
-                        this->config_dirty = true;
+                        store.changed();
                         break;
                     }
                 }
@@ -432,6 +452,7 @@ namespace overlay::windows {
 
         // add new card
         if (ImGui::Button("Add New Card")) {
+            editor_stale = false;
             memset(this->name_buffer, 0, sizeof(this->name_buffer));
             memset(this->card_buffer, 0, sizeof(this->card_buffer));
             generate_random_color();
@@ -448,142 +469,9 @@ namespace overlay::windows {
         }
     }
 
-    void CardManager::config_load() {
-        // clear cards
-        this->cards.clear();
-
-        // read config file
-        std::string config = fileutils::text_read(this->config_path);
-        if (!config.empty()) {
-
-            // parse document
-            Document doc;
-            doc.Parse(config.c_str());
-
-            // check parse error
-            auto error = doc.GetParseError();
-            if (error) {
-                log_warning("cardmanager", "config parse error: {}", static_cast<uint32_t>(error));
-            }
-
-            // verify root is a dict
-            if (doc.IsObject()) {
-
-                // find pages
-                auto pages = doc.FindMember("pages");
-                if (pages != doc.MemberEnd() && pages->value.IsArray()) {
-
-                    // iterate pages
-                    for (auto &page : pages->value.GetArray()) {
-                        if (page.IsObject()) {
-
-                            // get cards
-                            auto cards = page.FindMember("cards");
-                            if (cards != doc.MemberEnd() && cards->value.IsArray()) {
-
-                                // iterate cards
-                                for (auto &card : cards->value.GetArray()) {
-                                    if (card.IsObject()) {
-
-                                        // find attributes
-                                        auto name = card.FindMember("name");
-                                        if (name == doc.MemberEnd() || !name->value.IsString()) {
-                                            log_warning("cardmanager", "card name not found");
-                                            continue;
-                                        }
-                                        auto id = card.FindMember("id");
-                                        if (id == doc.MemberEnd() || !id->value.IsString()) {
-                                            log_warning("cardmanager", "card id not found");
-                                            continue;
-                                        }
-
-                                        // save entry
-                                        CardEntry entry {
-                                                .name = name->value.GetString(),
-                                                .id = id->value.GetString(),
-                                        };
-                                        generate_search_string(&entry);
-
-                                        // optional color
-                                        auto color = card.FindMember("color");
-                                        if (color != doc.MemberEnd() && color->value.IsArray()) {
-                                            auto c = color->value.GetArray();
-                                            if (c.Size() == 3 && c[0].IsFloat()) {
-                                                entry.color[0] = c[0].GetFloat();
-                                                entry.color[1] = c[1].GetFloat();
-                                                entry.color[2] = c[2].GetFloat();
-                                            }
-                                        }
-
-                                        this->cards.emplace_back(entry);
-
-                                    } else {
-                                        log_warning("cardmanager", "card is not an object");
-                                    }
-                                }
-                            } else {
-                                log_warning("cardmanager", "cards not found or not an array");
-                            }
-                        } else {
-                            log_warning("cardmanager", "page is not an object");
-                        }
-                    }
-                } else {
-                    log_warning("cardmanager", "pages not found or not an array");
-                }
-            }
-        }
-    }
-
     void CardManager::config_save() {
-        log_misc("cardmanager", "saving config...");
-
-        // create document
-        Document doc;
-        doc.Parse(
-                "{"
-                "  \"pages\": ["
-                "    {"
-                "      \"cards\": ["
-                "      ]"
-                "    }"
-                "  ]"
-                "}"
-        );
-
-        // check parse error
-        auto error = doc.GetParseError();
-        if (error) {
-            log_warning("cardmanager", "template parse error: {}", static_cast<uint32_t>(error));
-        }
-
-        // add cards
-        auto &cards = doc["pages"][0]["cards"];
-        for (auto &entry : this->cards) {
-            Value card(kObjectType);
-            card.AddMember("name", StringRef(entry.name.c_str()), doc.GetAllocator());
-            card.AddMember("id", StringRef(entry.id.c_str()), doc.GetAllocator());
-
-            Value color(kArrayType);
-            color.PushBack(entry.color[0], doc.GetAllocator());
-            color.PushBack(entry.color[1], doc.GetAllocator());
-            color.PushBack(entry.color[2], doc.GetAllocator());
-            card.AddMember("color", color, doc.GetAllocator());
-
-            cards.PushBack(card, doc.GetAllocator());
-        }
-
-        // build JSON; using pretty writer so people can manually edit it
-        StringBuffer buffer;
-        PrettyWriter<StringBuffer> writer(buffer);
-        doc.Accept(writer);
-
-        // save to file
-        if (fileutils::write_config_file("cardmanager", this->config_path, buffer.GetString())) {
-            this->config_dirty = false;
-        } else {
-            log_warning("cardmanager", "unable to save config file");
-        }
+        store.changed();
+        if (!store.save()) log_warning("cardmanager", "unable to save config file");
     }
 
     void CardManager::generate_search_string(CardEntry *card) {

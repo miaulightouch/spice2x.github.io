@@ -391,6 +391,8 @@ namespace overlay::windows {
     PatchManager::~PatchManager() = default;
 
     void PatchManager::build_content() {
+        patcher::StateLock state_lock;
+        patcher::process_pending_loader_reload();
 
         // check if initialized
         if (!patcher::local_patches_initialized) {

@@ -33,6 +33,7 @@ test('browser locale matching handles scripts, regions and supported-language pr
 test('language preference overrides the browser and blocked storage does not prevent switching', () => {
   try {
     initializeI18n(['en'], { getItem: () => 'ko' }); assert.equal(locale.value, 'ko');
+    initializeI18n(['ja-JP'], { getItem: () => null }); assert.equal(locale.value, 'ja');
     initializeI18n(['ja-JP'], { getItem: () => 'invalid' }); assert.equal(locale.value, 'ja');
     initializeI18n(['zh-TW'], { getItem: () => { throw Error('blocked'); } }); assert.equal(locale.value, 'zh-TW');
     const saved = new Map<string, string>();

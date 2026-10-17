@@ -5,10 +5,6 @@ export interface Profile { id: string; name: string; endpoint: string; password:
 export interface SavedCard { id: string; name: string; number: string }
 const PROFILE_KEY = 'arcade-room.profiles.v1';
 const CARD_KEY = 'arcade-room.cards.v1';
-const defaults = (): Profile[] => [
-  { id: 'jubeat-a', name: 'jubeat A', endpoint: '', password: '', rememberPassword: false },
-  { id: 'jubeat-b', name: 'jubeat B', endpoint: '', password: '', rememberPassword: false },
-];
 
 export function loadProfiles(storage?: Pick<Storage, 'getItem'>): Profile[] {
   try {
@@ -21,7 +17,7 @@ export function loadProfiles(storage?: Pick<Storage, 'getItem'>): Profile[] {
       if (profiles.length && new Set(profiles.map(p => p.id)).size === profiles.length) return profiles;
     }
   } catch { /* Invalid or unavailable browser storage must not stop the app. */ }
-  return defaults();
+  return [];
 }
 export function saveProfiles(profiles: Profile[], storage: Pick<Storage, 'setItem'> = localStorage): void {
   storage.setItem(PROFILE_KEY, JSON.stringify(profiles.map(p => ({ ...p, password: p.rememberPassword ? p.password : '' }))));

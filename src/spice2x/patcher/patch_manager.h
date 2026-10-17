@@ -3,11 +3,28 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace patcher {
+
+    class StateLock {
+    public:
+        StateLock();
+        explicit StateLock(std::try_to_lock_t);
+        ~StateLock();
+
+        StateLock(const StateLock&) = delete;
+        StateLock& operator=(const StateLock&) = delete;
+
+        bool owns_lock() const;
+
+    private:
+        std::unique_lock<std::recursive_mutex> lock;
+        [[maybe_unused]] bool outermost = false;
+    };
 
     enum class PatchType {
         Unknown,
@@ -110,15 +127,17 @@ namespace patcher {
     // lifecycle: init() sets up the config path and registers for DLL-load
     // notifications; apply_patches_on_start() applies auto-apply patches once the
     // game DLL is loaded. both are safe to call repeatedly.
+    // StateLock drains deferred DLL notifications when its outermost scope ends.
     void init();
     void apply_patches_on_start();
+    bool process_pending_loader_reload();
 
     // patch load / apply operations (also driven by the overlay window)
     void reload_local_patches(bool apply_patches = false);
     bool import_remote_patches_to_disk();
     void hard_apply_patches();
     void config_load();
-    void config_save();
+    bool config_save();
     std::vector<std::string> getExtraDlls(const std::string& firstDll);
 
     // process-wide patch engine state, rendered and edited by the overlay window

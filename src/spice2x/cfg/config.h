@@ -3,6 +3,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <cstdint>
+#include <mutex>
+#include <utility>
 
 #include "external/tinyxml2/tinyxml2.h"
 
@@ -16,6 +19,17 @@ struct ConfigKeypadBindings {
     std::filesystem::path card_paths[2];
 };
 
+struct ConfigOptionSnapshot {
+    uint32_t revision;
+    std::vector<Option> options;
+};
+
+enum class ConfigOptionUpdateResult {
+    Success,
+    Stale,
+    SaveFailed,
+};
+
 class Config {
 public:
     static Config &getInstance();
@@ -27,7 +41,7 @@ public:
     // flush pending in-memory changes to disk; intended to be paired with
     // addGame(game, false) in bulk-init paths so we write the XML once instead
     // of once per game
-    void save();
+    bool save();
 
     bool updateBinding(const Game &game, const Button &button, int alternative);
     bool updateBinding(const Game &game, const Analog &analog);
@@ -49,6 +63,11 @@ public:
 
     std::vector<Option> getOptions(const std::string &game);
     std::vector<Option> getOptions(Game *);
+    ConfigOptionSnapshot getOptionsSnapshot(const std::string &game);
+    ConfigOptionUpdateResult updateOptions(
+        const std::string &game,
+        uint32_t expected_revision,
+        const std::vector<std::pair<std::string, std::string>> &changes);
 
 private:
     Config();
@@ -61,7 +80,11 @@ private:
     bool status;
     std::filesystem::path configLocation;
     std::filesystem::path configLocationTemp;
+    mutable std::recursive_mutex config_mutex;
+    tinyxml2::XMLDocument savedConfigFile;
+    uint32_t revision = 0;
+    bool savedConfigValid = false;
 
     bool firstFillConfigFile();
-    void saveConfigFile();
+    bool saveConfigFile();
 };

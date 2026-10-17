@@ -1,23 +1,55 @@
-import { locale, msg, textRef, errorText, LocalizedError } from './i18n';
+import { locale, msg, textRef, errorText, renderText, LocalizedError } from './i18n';
 import { computed, ref, shallowRef, toRaw } from 'vue';
 import { ApiError, SpiceClient, asError, isRecord } from './api/client';
 import type { ConnectionStatus, Rpc } from './api/client';
 import { DemoApi } from './api/demo';
 import { ResizeQueue, defaultScene, parseResize } from './api/resize';
 import type { ResizePatch, ResizeState } from './api/resize';
+import { readCaptureFrame as fetchCaptureFrame, readCaptureScreens as fetchCaptureScreens } from './api/capture';
+import type { CaptureFrame } from './api/capture';
 import type { TextValue } from './i18n';
 import type { Profile } from './storage';
 import { readLog as fetchLog, downloadLog as fetchLogFile } from './api/log';
+import {
+  parseCardManager, parseGames, parseIoAnalogs, parseIoButtons, parseIoLights, parseOptions, parsePatches,
+} from './api/features';
+import type {
+  CardManagerState, GameList, IoAnalog, IoButton, IoLight, OptionsState, PatchState,
+} from './api/features';
 
-export function useController() {
+export type MemoryState = {
+  mem_total: number;
+  mem_total_used: number;
+  mem_used: number;
+  vmem_total: number;
+  vmem_total_used: number;
+  vmem_used: number;
+};
+
+function parseMemory(data: unknown[]): MemoryState {
+  const value = data[0];
+  if (!isRecord(value)) throw new LocalizedError('error.unexpected');
+  const read = (name: keyof MemoryState): number => {
+    const number = value[name];
+    if (typeof number !== 'number' || !Number.isFinite(number) || number < 0) throw new LocalizedError('error.unexpected');
+    return number;
+  };
+  return {
+    mem_total: read('mem_total'), mem_total_used: read('mem_total_used'), mem_used: read('mem_used'),
+    vmem_total: read('vmem_total'), vmem_total_used: read('vmem_total_used'), vmem_used: read('vmem_used'),
+  };
+}
+
+export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
   const status = ref<ConnectionStatus>('disconnected');
   const demo = ref(false);
-  const message = textRef(msg('msg.initial'));
+  const message = textRef();
   const error = textRef();
   const busy = ref('');
   const latency = ref(0);
   const game = ref('');
   const version = ref('');
+  const memory = ref<MemoryState>();
   const buttons = ref<string[]>([]);
   const coinQueue = ref<number>();
   const resize = ref<ResizeState>();
@@ -27,9 +59,21 @@ export function useController() {
   const image = ref('');
   const imageTime = ref('');
   const capturing = ref(false);
+  const captureScreens = ref<number[]>([]);
+  const selectedCaptureScreen = ref<number>();
+  const captureFrame = ref<CaptureFrame>();
+  const captureError = textRef();
   const configuredPassword = ref(false);
   const logText = ref('');
   const logSize = ref(0);
+  const games = ref<GameList>();
+  const options = ref<OptionsState>();
+  const patches = ref<PatchState>();
+  const cardManager = ref<CardManagerState>();
+  const ioButtons = ref<IoButton[]>([]);
+  const ioAnalogs = ref<IoAnalog[]>([]);
+  const ioLights = ref<IoLight[]>([]);
+  const featureErrors = ref<Record<string, string>>({});
   const connected = computed(() => demo.value || status.value === 'connected');
   const api = shallowRef<Rpc>();
   let client: SpiceClient | undefined;
@@ -40,20 +84,31 @@ export function useController() {
   let revision = 0;
   let confirmed: ResizeState | undefined;
   let resizeApplyError: Error | undefined;
+  let ioPollTimer: ReturnType<typeof setInterval> | undefined;
+  let ioPollBusy = false;
+  let ioReadBusy = false;
+  let ioPollGeneration = 0;
+  let featureSequence = 0;
+  const latestFeatureRequests = new Map<string, number>();
 
   function notify(text: TextValue): void { message.value = text; error.value = ''; }
   function report(value: unknown): void { error.value = errorText(value); }
   function disconnect(): void {
     ++generation;
+    stopIoPolling();
     queue?.cancel(); queue = undefined;
     const old = client; client = undefined;
     old?.disconnect(); captureClient?.disconnect(); captureClient = undefined;
     api.value = undefined; status.value = 'disconnected'; demo.value = false;
     resize.value = undefined; resizeError.value = ''; buttons.value = []; confirmed = undefined;
-    image.value = ''; imageTime.value = ''; game.value = ''; version.value = '';
+    image.value = ''; imageTime.value = ''; captureScreens.value = []; selectedCaptureScreen.value = undefined;
+    captureFrame.value = undefined; captureError.value = ''; capturing.value = false;
+    game.value = ''; version.value = ''; memory.value = undefined;
     configuredPassword.value = false; applying.value = false; unsaved.value = false;
     coinQueue.value = undefined; activeProfile = undefined; resizeApplyError = undefined;
     logText.value = ''; logSize.value = 0;
+    games.value = undefined; options.value = undefined; patches.value = undefined; cardManager.value = undefined;
+    ioButtons.value = []; ioAnalogs.value = []; ioLights.value = []; featureErrors.value = {};
   }
 
   async function connect(profile: Profile): Promise<void> {
@@ -82,7 +137,7 @@ export function useController() {
 
   async function startDemo(): Promise<void> {
     disconnect();
-    demo.value = true; api.value = new DemoApi();
+    demo.value = true; api.value = createDemoApi();
     await load(generation);
     notify(msg('msg.demo'));
   }
@@ -92,13 +147,16 @@ export function useController() {
     if (!rpc) return;
     const results = await Promise.allSettled([
       rpc.request('buttons', 'read'), rpc.request('info', 'avs'),
-      rpc.request('info', 'launcher'), rpc.request('resize', 'image_resize_get'), rpc.request('coin', 'get'),
+      rpc.request('info', 'launcher'), rpc.request('resize', 'image_resize_get'), rpc.request('coin', 'get'), rpc.request('info', 'memory'),
     ]);
     if (epoch !== generation) return;
-    const [b, a, l, r, c] = results;
+    const [b, a, l, r, c, m] = results;
     if (b?.status === 'fulfilled') buttons.value = b.value.filter(v => Array.isArray(v) && typeof v[0] === 'string').map(v => (v as string[])[0]!);
     if (a?.status === 'fulfilled' && isRecord(a.value[0])) game.value = String(a.value[0].model ?? '');
     if (l?.status === 'fulfilled' && isRecord(l.value[0])) version.value = String(l.value[0].version ?? '');
+    if (m?.status === 'fulfilled') {
+      try { memory.value = parseMemory(m.value); } catch { /* Older binaries may omit the optional status payload. */ }
+    }
     if (c?.status === 'fulfilled' && typeof c.value[0] === 'number') coinQueue.value = c.value[0];
     if (r?.status === 'fulfilled') {
       try {
@@ -218,13 +276,13 @@ export function useController() {
     });
   }
 
-  async function action(key: string, fn: () => Promise<void>): Promise<void> {
-    if (busy.value) return;
-    if (!connected.value || !api.value) { report(new LocalizedError('error.connectFirst')); return; }
+  async function action(key: string, fn: () => Promise<void>): Promise<boolean> {
+    if (busy.value) return false;
+    if (!connected.value || !api.value) { report(new LocalizedError('error.connectFirst')); return false; }
     const epoch = generation;
     busy.value = key; error.value = '';
-    try { await fn(); }
-    catch (value) { if (epoch === generation) report(value); }
+    try { await fn(); return epoch === generation; }
+    catch (value) { if (epoch === generation) report(value); return false; }
     finally { busy.value = ''; }
   }
   function exactButton(label: string): string | undefined { return buttons.value.find(n => n.toLowerCase() === label.toLowerCase()); }
@@ -261,28 +319,43 @@ export function useController() {
     await action('keypad', async () => { await api.value!.request('keypads', 'write', [unit, text]); notify(msg('msg.keypad')); });
   }
 
-  async function capture(): Promise<void> {
-    if (!connected.value || capturing.value) return;
+  async function captureScreen(screen?: number): Promise<void> {
     if (demo.value) { notify(msg('msg.gridOnly')); return; }
-    if (!activeProfile) return;
+    if (!connected.value || capturing.value || !activeProfile) return;
     const epoch = generation;
-    capturing.value = true; error.value = '';
+    capturing.value = true; error.value = ''; captureError.value = '';
     const next = new SpiceClient(15000); captureClient = next;
     try {
       await next.connect(activeProfile.endpoint, activeProfile.password);
-      const screens = await next.request('capture', 'get_screens');
-      const screen = screens.find(v => Number.isInteger(v) && Number(v) >= 0);
-      if (screen === undefined) throw new LocalizedError('error.noCapture');
-      const data = await next.request('capture', 'get_jpg', [screen, 65, 2]);
-      if (typeof data[3] !== 'string' || !/^[A-Za-z0-9+/=\r\n]+$/.test(data[3])) throw new LocalizedError('error.jpeg');
-      if (epoch === generation) {
-        image.value = 'data:image/jpeg;base64,' + data[3];
-        imageTime.value = new Date().toLocaleTimeString(locale.value, { hour12: false });
-        notify(msg('msg.captureUpdated'));
+      let screens: number[] | undefined;
+      let selected = screen;
+      if (selected === undefined) {
+        screens = await fetchCaptureScreens(next);
+        selected = selectedCaptureScreen.value;
+        if (selected === undefined || !screens.includes(selected)) selected = screens[0];
       }
-    } catch (value) { if (epoch === generation) report(value instanceof ApiError ? new LocalizedError('error.capture', { detail: value.message }) : value); }
-    finally { next.disconnect(); if (captureClient === next) captureClient = undefined; capturing.value = false; }
+      if (selected === undefined) throw new LocalizedError('error.noCapture');
+      const frame = await fetchCaptureFrame(next, selected);
+      if (epoch !== generation) return;
+      if (screens) captureScreens.value = screens;
+      selectedCaptureScreen.value = selected;
+      captureFrame.value = frame;
+      image.value = 'data:image/jpeg;base64,' + frame.jpeg;
+      imageTime.value = new Date().toLocaleTimeString(locale.value, { hour12: false });
+      notify(msg('msg.captureUpdated'));
+    } catch (value) {
+      if (epoch === generation) {
+        const failure = value instanceof ApiError ? new LocalizedError('error.capture', { detail: value.message }) : value;
+        captureError.value = errorText(failure); report(failure);
+      }
+    } finally {
+      next.disconnect();
+      if (captureClient === next) captureClient = undefined;
+      if (epoch === generation) capturing.value = false;
+    }
   }
+
+  async function capture(): Promise<void> { await captureScreen(); }
 
   async function readLog(): Promise<void> {
     await action('log', async () => {
@@ -292,6 +365,223 @@ export function useController() {
       if (epoch !== generation) return;
       logText.value = new TextDecoder().decode(chunk.bytes); logSize.value = chunk.size;
     });
+  }
+
+  type FeatureRequest = { rpc: Rpc; epoch: number; id: number; key: string };
+
+  async function readStatus(): Promise<void> {
+    let request: FeatureRequest | undefined;
+    try {
+      request = featureRpc('status');
+      const { rpc } = request;
+      const result = await Promise.allSettled([
+        rpc.request('info', 'avs'), rpc.request('info', 'launcher'), rpc.request('info', 'memory'),
+      ]);
+      if (!featureRequestCurrent(request)) return;
+      const [avs, launcher, memoryResult] = result;
+      if (avs.status === 'fulfilled' && isRecord(avs.value[0])) game.value = String(avs.value[0].model ?? '');
+      if (launcher.status === 'fulfilled' && isRecord(launcher.value[0])) version.value = String(launcher.value[0].version ?? '');
+      if (memoryResult.status === 'fulfilled') memory.value = parseMemory(memoryResult.value);
+      if (result.every(item => item.status === 'rejected')) throw (result[0] as PromiseRejectedResult).reason;
+      featureErrors.value = { ...featureErrors.value, status: '' };
+    } catch (value) { featureFailure('status', value, request); }
+  }
+
+  function featureRequestCurrent(request: FeatureRequest): boolean {
+    return request.epoch === generation && latestFeatureRequests.get(request.key) === request.id;
+  }
+
+  function featureFailure(name: string, value: unknown, request?: FeatureRequest): void {
+    if (request && !featureRequestCurrent(request)) return;
+    featureErrors.value = { ...featureErrors.value, [name]: renderText(errorText(value)) };
+  }
+
+  function featureRpc(key: string): FeatureRequest {
+    if (!connected.value || !api.value) throw new LocalizedError('error.connectFirst');
+    const request = { rpc: api.value, epoch: generation, id: ++featureSequence, key };
+    latestFeatureRequests.set(key, request.id);
+    return request;
+  }
+
+  async function refreshGames(): Promise<GameList | undefined> {
+    let request: FeatureRequest | undefined;
+    try {
+      request = featureRpc('options');
+      const { rpc } = request;
+      const value = parseGames(await rpc.request('config', 'get_games'));
+      if (!featureRequestCurrent(request)) return undefined;
+      games.value = value; featureErrors.value = { ...featureErrors.value, options: '' };
+      return value;
+    } catch (value) { featureFailure('options', value, request); return undefined; }
+  }
+
+  async function refreshOptions(gameName = options.value?.game || games.value?.current || game.value): Promise<void> {
+    let request: FeatureRequest | undefined;
+    try {
+      const list = games.value ?? await refreshGames();
+      const target = gameName || list?.current;
+      if (!target) return;
+      request = featureRpc('options');
+      const { rpc } = request;
+      const value = parseOptions(await rpc.request('config', 'get_options', [target]));
+      if (!featureRequestCurrent(request)) return;
+      options.value = value; featureErrors.value = { ...featureErrors.value, options: '' };
+    } catch (value) { featureFailure('options', value, request); }
+  }
+
+  async function saveOptions(changes: Array<{ name: string; value: string }>, expectedRevision?: number): Promise<boolean> {
+    return action('options-save', async () => {
+      const current = options.value;
+      if (!current) throw new LocalizedError('error.featureUnavailable');
+      const { rpc, epoch } = featureRpc('options-write');
+      const revision = expectedRevision ?? current.revision;
+      const fresh = parseOptions(await rpc.request('config', 'set_options', [current.game, revision, changes]));
+      if (epoch !== generation) return;
+      options.value = fresh; featureErrors.value = { ...featureErrors.value, options: '' };
+      notify(msg('msg.optionsSaved'));
+    });
+  }
+
+  async function refreshPatches(): Promise<void> {
+    let request: FeatureRequest | undefined;
+    try {
+      request = featureRpc('patches');
+      const { rpc } = request;
+      const value = parsePatches(await rpc.request('patches', 'get'));
+      if (!featureRequestCurrent(request)) return;
+      patches.value = value; featureErrors.value = { ...featureErrors.value, patches: '' };
+    } catch (value) { featureFailure('patches', value, request); }
+  }
+
+  async function setPatch(id: string, change: { enabled?: boolean; choice?: string; value?: number }): Promise<void> {
+    await action('patch', async () => {
+      const { rpc, epoch } = featureRpc('patch-write');
+      const value = parsePatches(await rpc.request('patches', 'set', [id, change]));
+      if (epoch !== generation) return;
+      patches.value = value; featureErrors.value = { ...featureErrors.value, patches: '' };
+    });
+  }
+
+  async function setPatchAutoApply(enabled: boolean): Promise<void> {
+    await action('patch-auto', async () => {
+      const { rpc, epoch } = featureRpc('patch-auto-write');
+      const value = parsePatches(await rpc.request('patches', 'set_auto_apply', [enabled]));
+      if (epoch !== generation) return;
+      patches.value = value;
+    });
+  }
+
+  async function savePatches(): Promise<void> {
+    await action('patch-save', async () => {
+      const { rpc, epoch } = featureRpc('patch-save');
+      const value = parsePatches(await rpc.request('patches', 'save'));
+      if (epoch !== generation) return;
+      patches.value = value; notify(msg('msg.patchesSaved'));
+    });
+  }
+
+  async function reloadPatches(): Promise<void> {
+    await action('patch-reload', async () => {
+      const { rpc, epoch } = featureRpc('patch-reload');
+      const value = parsePatches(await rpc.request('patches', 'reload'));
+      if (epoch !== generation) return;
+      patches.value = value; notify(msg('msg.patchesReloaded'));
+    });
+  }
+
+  async function refreshCardManager(): Promise<void> {
+    let request: FeatureRequest | undefined;
+    try {
+      request = featureRpc('manager');
+      const { rpc } = request;
+      const value = parseCardManager(await rpc.request('card', 'manager_get'));
+      if (!featureRequestCurrent(request)) return;
+      cardManager.value = value; featureErrors.value = { ...featureErrors.value, manager: '' };
+    } catch (value) { featureFailure('manager', value, request); }
+  }
+
+  async function saveCardManager(cards: CardManagerState['cards'], expectedRevision?: number): Promise<boolean> {
+    return action('manager-save', async () => {
+      const current = cardManager.value;
+      if (!current) throw new LocalizedError('error.featureUnavailable');
+      const { rpc, epoch } = featureRpc('manager-save');
+      const revision = expectedRevision ?? current.revision;
+      const value = parseCardManager(await rpc.request('card', 'manager_save', [revision, cards]));
+      if (epoch !== generation) return;
+      cardManager.value = value; notify(msg('msg.cardManagerSaved'));
+    });
+  }
+
+  async function setManagerActive(reader: 0 | 1, id: string): Promise<boolean> {
+    return action('manager-active', async () => {
+      const { rpc, epoch } = featureRpc('manager-active');
+      const value = parseCardManager(await rpc.request('card', 'manager_set_active', [reader, id]));
+      if (epoch !== generation) return;
+      cardManager.value = value;
+    });
+  }
+
+  async function readIoRequest(pollToken?: number): Promise<void> {
+    if (busy.value || ioReadBusy) return;
+    ioReadBusy = true;
+    let request: FeatureRequest | undefined;
+    try {
+      request = featureRpc('io');
+      const { rpc } = request;
+      const result = await Promise.allSettled([
+        rpc.request('buttons', 'read'), rpc.request('analogs', 'read'), rpc.request('lights', 'read'),
+      ]);
+      if (!featureRequestCurrent(request) || (pollToken !== undefined && pollToken !== ioPollGeneration)) return;
+      const [buttonsResult, analogsResult, lightsResult] = result;
+      if (buttonsResult.status === 'fulfilled') ioButtons.value = parseIoButtons(buttonsResult.value);
+      if (analogsResult.status === 'fulfilled') ioAnalogs.value = parseIoAnalogs(analogsResult.value);
+      if (lightsResult.status === 'fulfilled') ioLights.value = parseIoLights(lightsResult.value);
+      const rejected = result.find((item): item is PromiseRejectedResult => item.status === 'rejected');
+      if (rejected && result.every(item => item.status === 'rejected')) throw rejected.reason;
+      featureErrors.value = { ...featureErrors.value, io: '' };
+    } catch (value) {
+      if (request && !featureRequestCurrent(request)) return;
+      if (pollToken !== undefined && pollToken !== ioPollGeneration) return;
+      featureFailure('io', value, request);
+    } finally { ioReadBusy = false; }
+  }
+
+  async function readIo(): Promise<void> { await readIoRequest(); }
+
+  async function testIo(kind: 'button' | 'analog' | 'light', name: string, value = 1): Promise<void> {
+    await action('io-test', async () => {
+      const { rpc } = featureRpc('io-test');
+      if (kind === 'button') await rpc.request('buttons', 'pulse', [name, 180]);
+      else await rpc.request(kind === 'analog' ? 'analogs' : 'lights', 'pulse', [name, value, 180]);
+      notify(msg('msg.ioTested', { name }));
+    });
+  }
+
+  async function resetIo(kind?: 'button' | 'analog' | 'light'): Promise<void> {
+    await action('io-reset', async () => {
+      const { rpc } = featureRpc('io-reset');
+      if (!kind || kind === 'button') await rpc.request('buttons', 'write_reset');
+      if (!kind || kind === 'analog') await rpc.request('analogs', 'write_reset');
+      if (!kind || kind === 'light') await rpc.request('lights', 'write_reset');
+      notify(msg('msg.ioReset'));
+    });
+  }
+
+  function stopIoPolling(): void {
+    ++ioPollGeneration;
+    if (ioPollTimer) clearInterval(ioPollTimer);
+    ioPollTimer = undefined; ioPollBusy = false;
+  }
+
+  function startIoPolling(interval = 300): void {
+    stopIoPolling();
+    const pollToken = ioPollGeneration;
+    ioPollBusy = true; void readIoRequest(pollToken).finally(() => { ioPollBusy = false; });
+    ioPollTimer = setInterval(() => {
+      if (!connected.value || ioPollBusy || ioReadBusy || busy.value) return;
+      const nextToken = ioPollGeneration;
+      ioPollBusy = true; void readIoRequest(nextToken).finally(() => { ioPollBusy = false; });
+    }, Math.max(200, Math.min(2000, interval)));
   }
   async function downloadLog(): Promise<Blob | undefined> {
     let file: Blob | undefined;
@@ -303,10 +593,15 @@ export function useController() {
     return file;
   }
 
-  return { status, demo, message, error, busy, latency, game, version, buttons, coinQueue, resize, resizeError,
-    applying, unsaved, image, imageTime, capturing, configuredPassword, connected,
+  return { status, demo, message, error, busy, latency, game, version, memory, buttons, coinQueue, resize, resizeError,
+    applying, unsaved, image, imageTime, capturing, captureScreens, selectedCaptureScreen, captureFrame, captureError,
+    configuredPassword, connected,
     connect, startDemo, disconnect, notify, report, updateResize, selectScene, readResize, saveResize,
     machineControl, pulse, exactButton, releaseButtons, insertCoin, insertCard, getMachineCards, keypad, capture,
-    logText, logSize, readLog, downloadLog,
+    captureScreen,
+    logText, logSize, readLog, downloadLog, readStatus,
+    games, options, patches, cardManager, ioButtons, ioAnalogs, ioLights, featureErrors,
+    refreshGames, refreshOptions, saveOptions, refreshPatches, setPatch, setPatchAutoApply, savePatches, reloadPatches,
+    refreshCardManager, saveCardManager, setManagerActive, readIo, testIo, resetIo, startIoPolling, stopIoPolling,
     currentScene: computed(() => resize.value?.scenes[(resize.value?.scene ?? 1) - 1] ?? defaultScene()) };
 }

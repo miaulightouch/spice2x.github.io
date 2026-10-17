@@ -138,6 +138,7 @@ namespace GameAPI {
 
         void writeLight(rawinput::RawInputManager *manager, rawinput::Device *device, int index, float value);
         void writeLight(rawinput::RawInputManager *manager, Light &light, float value);
+        void writeLightOutput(rawinput::RawInputManager *manager, Light &light, float value);
         void writeLight(std::unique_ptr<rawinput::RawInputManager> &manager, Light &light, float value);
 
         float readLight(rawinput::Device *device, int index);

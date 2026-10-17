@@ -668,6 +668,7 @@ namespace patcher {
     }
 
     void reload_local_patches(bool apply_patches) {
+        StateLock lock;
         // announce reload
         if (apply_patches) {
             log_info("patchmanager", "reloading (local) and applying patches");
@@ -731,6 +732,7 @@ namespace patcher {
     }
 
     bool import_remote_patches_to_disk() {
+        StateLock lock;
         bool imported = false;
         // clear old patches
         patches.clear();
