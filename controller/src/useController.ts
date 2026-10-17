@@ -5,6 +5,8 @@ import type { ConnectionStatus, Rpc } from './api/client';
 import { DemoApi } from './api/demo';
 import { ResizeQueue, defaultScene, parseResize } from './api/resize';
 import type { ResizePatch, ResizeState } from './api/resize';
+import { readCaptureFrame as fetchCaptureFrame, readCaptureScreens as fetchCaptureScreens } from './api/capture';
+import type { CaptureFrame } from './api/capture';
 import type { TextValue } from './i18n';
 import type { Profile } from './storage';
 import { readLog as fetchLog, downloadLog as fetchLogFile } from './api/log';
@@ -41,7 +43,7 @@ function parseMemory(data: unknown[]): MemoryState {
 export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
   const status = ref<ConnectionStatus>('disconnected');
   const demo = ref(false);
-  const message = textRef(msg('msg.initial'));
+  const message = textRef();
   const error = textRef();
   const busy = ref('');
   const latency = ref(0);
@@ -57,6 +59,10 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
   const image = ref('');
   const imageTime = ref('');
   const capturing = ref(false);
+  const captureScreens = ref<number[]>([]);
+  const selectedCaptureScreen = ref<number>();
+  const captureFrame = ref<CaptureFrame>();
+  const captureError = textRef();
   const configuredPassword = ref(false);
   const logText = ref('');
   const logSize = ref(0);
@@ -95,7 +101,9 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     old?.disconnect(); captureClient?.disconnect(); captureClient = undefined;
     api.value = undefined; status.value = 'disconnected'; demo.value = false;
     resize.value = undefined; resizeError.value = ''; buttons.value = []; confirmed = undefined;
-    image.value = ''; imageTime.value = ''; game.value = ''; version.value = ''; memory.value = undefined;
+    image.value = ''; imageTime.value = ''; captureScreens.value = []; selectedCaptureScreen.value = undefined;
+    captureFrame.value = undefined; captureError.value = ''; capturing.value = false;
+    game.value = ''; version.value = ''; memory.value = undefined;
     configuredPassword.value = false; applying.value = false; unsaved.value = false;
     coinQueue.value = undefined; activeProfile = undefined; resizeApplyError = undefined;
     logText.value = ''; logSize.value = 0;
@@ -311,28 +319,43 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     await action('keypad', async () => { await api.value!.request('keypads', 'write', [unit, text]); notify(msg('msg.keypad')); });
   }
 
-  async function capture(): Promise<void> {
-    if (!connected.value || capturing.value) return;
+  async function captureScreen(screen?: number): Promise<void> {
     if (demo.value) { notify(msg('msg.gridOnly')); return; }
-    if (!activeProfile) return;
+    if (!connected.value || capturing.value || !activeProfile) return;
     const epoch = generation;
-    capturing.value = true; error.value = '';
+    capturing.value = true; error.value = ''; captureError.value = '';
     const next = new SpiceClient(15000); captureClient = next;
     try {
       await next.connect(activeProfile.endpoint, activeProfile.password);
-      const screens = await next.request('capture', 'get_screens');
-      const screen = screens.find(v => Number.isInteger(v) && Number(v) >= 0);
-      if (screen === undefined) throw new LocalizedError('error.noCapture');
-      const data = await next.request('capture', 'get_jpg', [screen, 65, 2]);
-      if (typeof data[3] !== 'string' || !/^[A-Za-z0-9+/=\r\n]+$/.test(data[3])) throw new LocalizedError('error.jpeg');
-      if (epoch === generation) {
-        image.value = 'data:image/jpeg;base64,' + data[3];
-        imageTime.value = new Date().toLocaleTimeString(locale.value, { hour12: false });
-        notify(msg('msg.captureUpdated'));
+      let screens: number[] | undefined;
+      let selected = screen;
+      if (selected === undefined) {
+        screens = await fetchCaptureScreens(next);
+        selected = selectedCaptureScreen.value;
+        if (selected === undefined || !screens.includes(selected)) selected = screens[0];
       }
-    } catch (value) { if (epoch === generation) report(value instanceof ApiError ? new LocalizedError('error.capture', { detail: value.message }) : value); }
-    finally { next.disconnect(); if (captureClient === next) captureClient = undefined; capturing.value = false; }
+      if (selected === undefined) throw new LocalizedError('error.noCapture');
+      const frame = await fetchCaptureFrame(next, selected);
+      if (epoch !== generation) return;
+      if (screens) captureScreens.value = screens;
+      selectedCaptureScreen.value = selected;
+      captureFrame.value = frame;
+      image.value = 'data:image/jpeg;base64,' + frame.jpeg;
+      imageTime.value = new Date().toLocaleTimeString(locale.value, { hour12: false });
+      notify(msg('msg.captureUpdated'));
+    } catch (value) {
+      if (epoch === generation) {
+        const failure = value instanceof ApiError ? new LocalizedError('error.capture', { detail: value.message }) : value;
+        captureError.value = errorText(failure); report(failure);
+      }
+    } finally {
+      next.disconnect();
+      if (captureClient === next) captureClient = undefined;
+      if (epoch === generation) capturing.value = false;
+    }
   }
+
+  async function capture(): Promise<void> { await captureScreen(); }
 
   async function readLog(): Promise<void> {
     await action('log', async () => {
@@ -571,9 +594,11 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
   }
 
   return { status, demo, message, error, busy, latency, game, version, memory, buttons, coinQueue, resize, resizeError,
-    applying, unsaved, image, imageTime, capturing, configuredPassword, connected,
+    applying, unsaved, image, imageTime, capturing, captureScreens, selectedCaptureScreen, captureFrame, captureError,
+    configuredPassword, connected,
     connect, startDemo, disconnect, notify, report, updateResize, selectScene, readResize, saveResize,
     machineControl, pulse, exactButton, releaseButtons, insertCoin, insertCard, getMachineCards, keypad, capture,
+    captureScreen,
     logText, logSize, readLog, downloadLog, readStatus,
     games, options, patches, cardManager, ioButtons, ioAnalogs, ioLights, featureErrors,
     refreshGames, refreshOptions, saveOptions, refreshPatches, setPatch, setPatchAutoApply, savePatches, reloadPatches,

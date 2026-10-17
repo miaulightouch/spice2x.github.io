@@ -17,7 +17,8 @@ import { cloneCardManagerCards, mergeCardManagerDraft } from './api/cardManagerD
 const c = useController();
 const { status, demo, connected, busy, error, message, game, version, latency, memory, resize, resizeError,
   currentScene, applying, unsaved, image, imageTime, capturing, configuredPassword, coinQueue, logText, logSize,
-  games, options, patches, cardManager, ioButtons, ioAnalogs, ioLights, featureErrors } = c;
+  games, options, patches, cardManager, ioButtons, ioAnalogs, ioLights, featureErrors,
+  captureScreens, selectedCaptureScreen, captureFrame, captureError } = c;
 const logSearch = ref('');
 const filteredLog = computed(() => logSearch.value ? logText.value.split('\n').filter(line => line.toLowerCase().includes(logSearch.value.toLowerCase())).join('\n') : logText.value);
 async function downloadLog(): Promise<void> {
@@ -29,10 +30,11 @@ async function downloadLog(): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 const profiles = ref(loadProfiles());
-const selectedId = ref(profiles.value[0]!.id);
-const selected = computed(() => profiles.value.find(p => p.id === selectedId.value)!);
-const draft = reactive<Profile>({ ...selected.value });
-const tab = ref('resize');
+const selectedId = ref(profiles.value[0]?.id ?? '');
+const selected = computed(() => profiles.value.find(p => p.id === selectedId.value));
+const draft = reactive<Profile>({ id: newId(), name: '', endpoint: '', password: '', rememberPassword: false, ...selected.value });
+const tab = ref(profiles.value.length ? 'resize' : 'connection');
+const buildVersion = import.meta.env.VITE_BUILD_VERSION;
 const step = ref(1);
 const cards = ref(loadCards());
 const cardNumber = ref('');
@@ -73,10 +75,15 @@ function persistProfiles(): boolean {
   try { saveProfiles(profiles.value); return true; }
   catch { c.report(new LocalizedError('error.storage')); return false; }
 }
-function changeProfile(): void {
-  c.disconnect(); Object.assign(draft, selected.value); machineCards.value = [];
+function changeProfile(event: Event): void {
+  const picker = event.target as HTMLSelectElement;
+  if (picker.selectedOptions[0]?.hasAttribute('data-manage')) { tab.value = 'connection'; picker.value = selectedId.value; return; }
+  selectedId.value = picker.value;
+  const profile = selected.value;
+  if (!profile) return;
+  c.disconnect(); Object.assign(draft, profile); machineCards.value = [];
   managerDraft.value = []; managerActive.value = ['', '']; managerBaseRevision.value = undefined; managerDirty.value = false;
-  clearOptionDraft(); showGrid.value = true; c.notify(msg('msg.selected', { name: selected.value.name }));
+  clearOptionDraft(); showGrid.value = true; c.notify(msg('msg.selected', { name: profile.name }));
 }
 function applyProfile(persist = true): boolean {
   try {
@@ -84,7 +91,8 @@ function applyProfile(persist = true): boolean {
     if (!draft.name.trim()) throw new LocalizedError('error.name');
     const saved = { ...draft, endpoint, name: draft.name.trim() };
     const index = profiles.value.findIndex(p => p.id === selectedId.value);
-    profiles.value[index] = saved; Object.assign(draft, saved);
+    if (index < 0) profiles.value.push(saved); else profiles.value[index] = saved;
+    selectedId.value = saved.id; Object.assign(draft, saved);
     return persist ? persistProfiles() : true;
   } catch (value) { c.report(value); return false; }
 }
@@ -92,7 +100,7 @@ async function connect(): Promise<void> {
   if (!applyProfile(false)) return;
   const saved = persistProfiles();
   machineCards.value = []; showGrid.value = true;
-  await c.connect({ ...selected.value });
+  await c.connect({ ...draft });
   if (!saved && connected.value) c.report(new LocalizedError('error.profileNotSaved'));
 }
 function saveProfile(): void {
@@ -100,9 +108,9 @@ function saveProfile(): void {
 }
 function addProfile(): void {
   c.disconnect();
-  const profile = { id: newId(), name: t('msg.defaultCabinet', { n: profiles.value.length + 1 }), endpoint: '', password: '', rememberPassword: false };
-  profiles.value.push(profile); selectedId.value = profile.id; Object.assign(draft, profile);
-  persistProfiles(); tab.value = 'connection';
+  selectedId.value = '';
+  Object.assign(draft, { id: newId(), name: '', endpoint: '', password: '', rememberPassword: false });
+  tab.value = 'connection';
 }
 function scale(axis: 'x' | 'y', value: number): void {
   if (!Number.isFinite(value)) return;
@@ -302,10 +310,12 @@ function ensureIoPolling(): void { if (tab.value === 'io') c.startIoPolling(); e
 watch(tab, ensureIoPolling);
 async function openPatches(): Promise<void> { tab.value = 'patches'; if (!featureReady.value) return; await c.refreshPatches(); }
 async function openIo(): Promise<void> { tab.value = 'io'; c.startIoPolling(); }
+async function openPreview(): Promise<void> { tab.value = 'preview'; if (connected.value && !demo.value) await c.captureScreen(); }
 function selectTab(key: string): void {
   if (key === 'settings') { void openOptions(); return; }
   if (key === 'patches') { void openPatches(); return; }
   if (key === 'io') { void openIo(); return; }
+  if (key === 'preview') { void openPreview(); return; }
   tab.value = key;
 }
 const systemActions = computed(() => [
@@ -338,23 +348,25 @@ onBeforeUnmount(() => {
 <template>
   <div class="controller-app">
     <header class="app-header">
-      <a class="brand" href="#" @click.prevent="tab = 'resize'" :aria-label="t('app.home')">
+      <a class="brand" href="#" @click.prevent="tab = profiles.length ? 'resize' : 'connection'" :aria-label="t('app.home')">
         <span class="brand-mark" aria-hidden="true"><i v-for="n in 4" :key="n"></i></span>
-        <span><strong>ARCADE ROOM</strong><small>{{ t('app.subtitle') }}</small></span>
+        <strong>{{ t('app.title') }}</strong>
       </a>
-      <label class="language-control"><span class="sr-only">{{ t('app.language') }}</span><select :value="locale" @change="setLocale(($event.target as HTMLSelectElement).value as Locale)"><option v-for="language in languages" :key="language.code" :value="language.code" :lang="language.code">{{ language.label }}</option></select></label>
       <div class="machine-controls">
         <label class="sr-only" for="machine">{{ t('connection.select') }}</label>
-        <select id="machine" v-model="selectedId" :disabled="!!busy || status === 'connecting'" @change="changeProfile"><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option></select>
-        <span class="connection-chip" :data-status="demo ? 'demo' : status"><i aria-hidden="true"></i>{{ modeLabel }}</span>
+        <select id="machine" :value="selectedId" :disabled="!profiles.length || !!busy || status === 'connecting'" @change="changeProfile"><option v-if="!selected" value="" disabled>{{ t(profiles.length ? 'connection.newProfile' : 'connection.noProfiles') }}</option><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option><option v-if="profiles.length" value="manage" data-manage>{{ t('connection.manage') }}</option></select>
         <button v-if="connected || status === 'connecting'" class="quiet compact" :disabled="!!busy" @click="c.disconnect(); c.notify(msg('msg.disconnected'))">{{ t('connection.disconnect') }}</button>
-        <button v-else class="primary compact" @click="tab = 'connection'">{{ t('connection.settings') }}</button>
+        <button v-else-if="selected" class="primary compact" :disabled="!!busy" @click="connect">{{ t('connection.connect') }}</button>
+        <button v-else class="primary compact" @click="tab = 'connection'">{{ t('connection.manage') }}</button>
+        <span class="connection-chip" :data-status="demo ? 'demo' : status"><i aria-hidden="true"></i>{{ modeLabel }}</span>
       </div>
+      <span class="header-spacer" aria-hidden="true"></span>
+      <label class="language-control"><span aria-hidden="true">&#25991;/A <small>▾</small></span><span class="sr-only">{{ t('app.language') }}</span><select :value="locale" @change="setLocale(($event.target as HTMLSelectElement).value as Locale)"><option v-for="language in languages" :key="language.code" :value="language.code" :lang="language.code">{{ language.label }}</option></select></label>
     </header>
     <div v-if="demo" class="demo-strip">{{ t('connection.demoStrip') }}<button class="text-button" @click="c.disconnect(); tab = 'connection'">{{ t('connection.connect') }}</button></div>
     <div v-if="offline" class="offline-strip">{{ t('connection.offline') }}</div>
     <nav class="main-nav" :aria-label="t('nav.label')">
-      <button v-for="item in [{ key: 'io', label: t('nav.io'), symbol: '◌' }, { key: 'settings', label: t('nav.settings'), symbol: '☷' }, { key: 'keypad', label: t('nav.keypad'), symbol: '⌨' }, { key: 'cards', label: t('nav.cards'), symbol: '▤' }, { key: 'log', label: t('nav.log'), symbol: '▥' }, { key: 'control', label: t('nav.control'), symbol: '◉' }, { key: 'patches', label: t('nav.patches'), symbol: '⚙' }, { key: 'resize', label: t('nav.resize'), symbol: '▦' }, { key: 'status', label: t('nav.status'), symbol: '⌁' }]" :key="item.key" :aria-pressed="tab === item.key" @click="selectTab(item.key)"><span aria-hidden="true">{{ item.symbol }}</span>{{ item.label }}</button>
+      <button v-for="item in [{ key: 'io', label: t('nav.io'), symbol: '◌' }, { key: 'settings', label: t('nav.settings'), symbol: '☷' }, { key: 'keypad', label: t('nav.keypad'), symbol: '⌨' }, { key: 'cards', label: t('nav.cards'), symbol: '▤' }, { key: 'log', label: t('nav.log'), symbol: '▥' }, { key: 'control', label: t('nav.control'), symbol: '◉' }, { key: 'patches', label: t('nav.patches'), symbol: '⚙' }, { key: 'resize', label: t('nav.resize'), symbol: '▦' }, { key: 'preview', label: t('nav.screen'), symbol: '▣' }, { key: 'status', label: t('nav.status'), symbol: '⌁' }]" :key="item.key" :aria-pressed="tab === item.key" @click="selectTab(item.key)"><span aria-hidden="true">{{ item.symbol }}</span>{{ item.label }}</button>
     </nav>
     <main class="main-content">
       <section v-show="tab === 'settings'" aria-labelledby="options-title">
@@ -429,6 +441,13 @@ onBeforeUnmount(() => {
         <div class="page-title"><h1 id="keypad-title">{{ t('nav.keypad') }}</h1><label class="inline-field">{{ t('cards.reader') }}<select v-model.number="unit"><option :value="0">P1</option><option :value="1">P2</option></select></label></div>
         <div class="settings-panel keypad-panel"><h2>{{ t('cards.keypad') }}</h2><p class="muted small">{{ t('cards.target', { n: unit + 1 }) }}</p><div class="keypad"><button v-for="key in ['1','2','3','4','5','6','7','8','9','A','0','D']" :key="key" :disabled="!connected || !!busy" @click="c.keypad(unit, key)">{{ key === 'A' ? '00' : key === 'D' ? '.' : key }}</button></div></div>
       </section>
+      <section v-show="tab === 'preview'" aria-labelledby="preview-title">
+        <div class="page-title"><h1 id="preview-title">{{ t('preview.title') }}</h1><div class="button-row"><select v-if="captureScreens.length" :value="selectedCaptureScreen" :aria-label="t('preview.title')" :disabled="capturing || !connected || demo" @change="c.captureScreen(Number(($event.target as HTMLSelectElement).value))"><option v-for="screen in captureScreens" :key="screen" :value="screen">{{ t('preview.screen', { n: screen + 1 }) }}</option></select><button class="quiet compact" :disabled="!connected || demo || capturing" @click="c.captureScreen()">{{ t(capturing ? 'screen.capturing' : 'screen.refreshCapture') }}</button></div></div>
+        <p class="muted small">{{ t('preview.hint') }}</p>
+        <p v-if="captureError" class="error-text" role="alert">{{ captureError }}</p>
+        <div class="capture-viewer"><img v-if="image" :src="image" :alt="t('screen.capture')"><p v-else class="muted small">{{ t('preview.empty') }}</p></div>
+        <p v-if="captureFrame" class="muted small numeric">{{ captureFrame.width }} × {{ captureFrame.height }} · {{ imageTime }}</p>
+      </section>
       <section v-show="tab === 'connection'" aria-labelledby="system-title">
         <div class="page-title"><h1 id="system-title">{{ t('connection.settings') }}</h1><button class="quiet compact" :disabled="!!busy || status === 'connecting'" @click="addProfile">{{ t('connection.add') }}</button></div>
         <div class="connection-layout"><form class="settings-panel" @submit.prevent="connect"><fieldset :disabled="!!busy || status === 'connecting'"><label class="stacked-field">{{ t('connection.name') }}<input v-model="draft.name" maxlength="60" required autocomplete="off"></label><label class="stacked-field">{{ t('connection.endpoint') }}<input v-model="draft.endpoint" placeholder="ws://192.168.1.10:1338" type="url" required spellcheck="false" autocomplete="off" autocapitalize="none"></label><p class="muted small">{{ t('connection.portHint') }}</p><label class="stacked-field">{{ t('connection.password') }}<input v-model="draft.password" type="password" autocomplete="off" :placeholder="t('connection.passwordPlaceholder')"></label><label class="check"><input v-model="draft.rememberPassword" type="checkbox">{{ t('connection.remember') }}</label><p class="muted small" v-if="draft.rememberPassword">{{ t('connection.rememberHint') }}</p><div class="panel-actions"><button type="button" @click="saveProfile">{{ t('connection.save') }}</button><button class="primary" type="submit">{{ t(status === 'connecting' ? 'status.connecting' : 'connection.connect') }}</button></div></fieldset></form>
@@ -455,6 +474,6 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </main>
-    <footer class="app-footer"><div class="feedback" :class="{ 'has-error': !!error }" :role="error ? 'alert' : 'status'" aria-live="polite">{{ error || message }}</div><div class="footer-meta" v-if="connected && !demo"><span>{{ [game, version].filter(Boolean).join(' · ') || selected.name }}</span><span v-if="latency">{{ latency }} ms</span></div><div class="footer-meta" v-else><span>Arcade Room</span><span>SpiceAPI · WebSocket</span></div></footer>
+    <footer class="app-footer"><div v-if="error || message" class="feedback" :class="{ 'has-error': !!error }" :role="error ? 'alert' : 'status'" aria-live="polite">{{ error || message }}</div><div class="footer-meta">version {{ buildVersion }}</div></footer>
   </div>
 </template>

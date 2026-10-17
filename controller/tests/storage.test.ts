@@ -63,7 +63,12 @@ test('storage loaders retain their existing format validation', () => {
     id: 'valid', name: 'Valid', endpoint: 'ws://192.0.2.1:1338/', password: '', rememberPassword: false,
   }]);
   profiles.setItem('arcade-room.profiles.v1', '{broken');
-  assert.equal(loadProfiles(profiles).length, 2);
+  assert.deepEqual(loadProfiles(profiles), []);
+
+  profiles.setItem('arcade-room.profiles.v1', JSON.stringify([]));
+  assert.deepEqual(loadProfiles(profiles), []);
+  profiles.setItem('arcade-room.profiles.v1', JSON.stringify({ invalid: true }));
+  assert.deepEqual(loadProfiles(profiles), []);
 
   const cards = memoryStorage();
   cards.setItem('arcade-room.cards.v1', JSON.stringify([

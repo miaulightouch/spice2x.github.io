@@ -1,10 +1,16 @@
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
 const precachePublicFiles = ['icon.svg', 'manifest.webmanifest', 'LICENSE.txt', 'THIRD_PARTY_NOTICES.txt'];
+const buildDate = new Date().toISOString().slice(2, 10);
+const buildCommit = execFileSync('git', ['rev-parse', '--short=7', 'HEAD'], {
+  cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8',
+}).trim();
 
 export function offlinePlugin(): Plugin {
   let publicDir: string | false = false;
@@ -49,5 +55,8 @@ self.addEventListener('fetch', event => {
 
 export default defineConfig({
   base: './',
+  define: {
+    'import.meta.env.VITE_BUILD_VERSION': JSON.stringify(`${buildDate}-${buildCommit}`),
+  },
   plugins: [vue(), offlinePlugin()],
 });
