@@ -39,6 +39,7 @@ namespace patcher {
     }
 
     void hard_apply_patches() {
+        StateLock lock;
         std::vector<std::filesystem::path> written_list;
 
         // dll_name -> in-memory image; populated lazily, written back once at
@@ -143,6 +144,7 @@ namespace patcher {
     }
 
     PatchStatus is_patch_active(PatchData &patch) {
+        StateLock lock;
 
         // check patch type
         switch (patch.type) {
@@ -475,6 +477,7 @@ namespace patcher {
     }
 
     bool apply_patch(PatchData &patch, bool active) {
+        StateLock lock;
 
         // check patch type
         switch (patch.type) {

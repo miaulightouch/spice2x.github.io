@@ -377,6 +377,8 @@ set(SOURCE_FILES ${SOURCE_FILES}
         api/response.cpp
         api/module.cpp
         api/modules/card.cpp
+        api/modules/config.cpp
+        api/modules/patches.cpp
         api/modules/buttons.cpp
         api/modules/capture.cpp
         api/modules/analogs.cpp
@@ -411,6 +413,7 @@ set(SOURCE_FILES ${SOURCE_FILES}
         cfg/game.cpp
         cfg/button.cpp
         cfg/config.cpp
+        cfg/card_manager.cpp
         cfg/api.cpp
         cfg/option.cpp
         cfg/light.cpp

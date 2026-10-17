@@ -20,6 +20,7 @@ namespace patcher {
     }
 
     void config_load() {
+        StateLock lock;
         log_info("patchmanager", "loading config");
 
         // read config file
@@ -146,7 +147,8 @@ namespace patcher {
         return hash.getHash();
     }
 
-    void config_save() {
+    bool config_save() {
+        StateLock lock;
 
         // create document
         Document doc;
@@ -164,6 +166,7 @@ namespace patcher {
         auto error = doc.GetParseError();
         if (error) {
             log_warning("patchmanager", "template parse error: {}", static_cast<uint32_t>(error));
+            return false;
         }
 
         // auto apply setting
@@ -258,8 +261,10 @@ namespace patcher {
         // save to file
         if (fileutils::write_config_file("patchmanager", config_path, buffer.GetString())) {
             config_dirty = false;
+            return true;
         } else {
             log_warning("patchmanager", "unable to save config file");
+            return false;
         }
     }
 }

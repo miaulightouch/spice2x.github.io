@@ -4,16 +4,11 @@
 #include <optional>
 
 #include "overlay/window.h"
+#include "cfg/card_manager.h"
 
 namespace overlay::windows {
 
-    struct CardEntry {
-        std::string name = "unnamed";
-        std::string id = "E0040100FFFFFFFF";
-        std::string search_string = "";
-        bool read_only = false;
-        float color[3] {};
-    };
+    using CardEntry = cfg::CardEntry;
 
     class CardManager : public Window {
     public:
@@ -25,9 +20,11 @@ namespace overlay::windows {
 
     private:
 
-        std::filesystem::path config_path;
-        bool config_dirty = false;
-        std::vector<CardEntry> cards;
+        cfg::CardManagerStore &store = cfg::CardManagerStore::get();
+        bool &config_dirty = store.dirty;
+        std::vector<CardEntry> &cards = store.cards;
+        uint64_t seen_revision = 0;
+        bool editor_stale = false;
         char name_buffer[65] {};
         char card_buffer[17] {};
         float color_buffer[3] {};
@@ -40,7 +37,6 @@ namespace overlay::windows {
         std::string search_filter = "";
         std::string search_filter_in_lower_case = "";
 
-        void config_load();
         void config_save();
 
         void generate_search_string(CardEntry *card);

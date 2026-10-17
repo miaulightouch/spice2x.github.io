@@ -91,6 +91,10 @@ Config::Config() {
     } while (configLoadError != tinyxml2::XMLError::XML_SUCCESS);
 
     this->configFile.SetBOM(true);
+    if (this->status && !this->savedConfigValid) {
+        this->configFile.DeepCopy(&this->savedConfigFile);
+        this->savedConfigValid = true;
+    }
 }
 
 ////////////////////////
@@ -103,10 +107,17 @@ Config &Config::getInstance() {
 }
 
 bool Config::getStatus() {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     return this->status;
 }
 
+uint32_t Config::getRevision() const {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
+    return this->revision;
+}
+
 bool Config::addGame(Game &game, bool save) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
     tinyxml2::XMLElement *gameNodes = rootNode->FirstChildElement("game");
 
@@ -503,18 +514,20 @@ bool Config::addGame(Game &game, bool save) {
     // save config (skipped when caller batches multiple addGame calls
     // and flushes once at the end via Config::save())
     if (save) {
-        this->saveConfigFile();
+        return this->saveConfigFile();
     }
 
     // return success
     return true;
 }
 
-void Config::save() {
-    this->saveConfigFile();
+bool Config::save() {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
+    return this->saveConfigFile();
 }
 
 bool Config::updateBinding(const Game &game, const Button &button, int alternative) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
 
     // get root node
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
@@ -654,14 +667,11 @@ bool Config::updateBinding(const Game &game, const Button &button, int alternati
         return false;
     }
 
-    // save config
-    this->saveConfigFile();
-
-    // return success
-    return true;
+    return this->saveConfigFile();
 }
 
 bool Config::updateBinding(const Game &game, const Analog &analog) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
     tinyxml2::XMLElement *gameNodes = rootNode->FirstChildElement("game");
 
@@ -732,12 +742,11 @@ bool Config::updateBinding(const Game &game, const Analog &analog) {
         gameAnalogsNode->InsertEndChild(gameAnalogNode);
     }
 
-    this->saveConfigFile();
-
-    return true;
+    return this->saveConfigFile();
 }
 
 bool Config::updateBinding(const Game &game, ConfigKeypadBindings &keypads) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
     tinyxml2::XMLElement *gameNodes = rootNode->FirstChildElement("game");
 
@@ -773,12 +782,11 @@ bool Config::updateBinding(const Game &game, ConfigKeypadBindings &keypads) {
     gameKeypadNode->SetAttribute("cardpath1", reinterpret_cast<const char *>(keypads.card_paths[0].u8string().c_str()));
     gameKeypadNode->SetAttribute("cardpath2", reinterpret_cast<const char *>(keypads.card_paths[1].u8string().c_str()));
 
-    this->saveConfigFile();
-
-    return true;
+    return this->saveConfigFile();
 }
 
 bool Config::updateBinding(const Game &game, const Light &light, int alternative) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
 
     // get root node and find game
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
@@ -871,14 +879,11 @@ bool Config::updateBinding(const Game &game, const Light &light, int alternative
         return false;
     }
 
-    // save config
-    this->saveConfigFile();
-
-    // return success
-    return true;
+    return this->saveConfigFile();
 }
 
 bool Config::updateBinding(const Game &game, const Option &option) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
     tinyxml2::XMLElement *gameNodes = rootNode->FirstChildElement("game");
 
@@ -931,12 +936,11 @@ bool Config::updateBinding(const Game &game, const Option &option) {
         gameOptionsNode->InsertEndChild(gameOptionNode);
     }
 
-    this->saveConfigFile();
-
-    return true;
+    return this->saveConfigFile();
 }
 
 std::vector<Button> Config::getButtons(const std::string &gameName) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     std::vector<Button> buttons;
 
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
@@ -1040,10 +1044,12 @@ std::vector<Button> Config::getButtons(const std::string &gameName) {
 }
 
 std::vector<Button> Config::getButtons(Game *game) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     return this->getButtons(game->getGameName());
 }
 
 std::vector<Light> Config::getLights(const std::string &gameName) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     std::vector<Light> lights;
 
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
@@ -1122,10 +1128,12 @@ std::vector<Light> Config::getLights(const std::string &gameName) {
 }
 
 std::vector<Light> Config::getLights(Game *game) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     return this->getLights(game->getGameName());
 }
 
 std::vector<Analog> Config::getAnalogs(const std::string &gameName) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     std::vector<Analog> analogs;
 
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
@@ -1205,10 +1213,12 @@ std::vector<Analog> Config::getAnalogs(const std::string &gameName) {
 }
 
 std::vector<Analog> Config::getAnalogs(Game *game) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     return this->getAnalogs(game->getGameName());
 }
 
 ConfigKeypadBindings Config::getKeypadBindings(const std::string &gameName) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     ConfigKeypadBindings bindings {};
 
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
@@ -1259,10 +1269,12 @@ ConfigKeypadBindings Config::getKeypadBindings(const std::string &gameName) {
 }
 
 ConfigKeypadBindings Config::getKeypadBindings(Game *game) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     return this->getKeypadBindings(game->getGameName());
 }
 
 std::vector<Option> Config::getOptions(const std::string &gameName) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     std::vector<Option> options;
 
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
@@ -1307,7 +1319,7 @@ std::vector<Option> Config::getOptions(const std::string &gameName) {
                     .name = optionNodeName,
                     .desc = "",
                     .type = OptionType::Text,
-                }, value);
+                }, value == nullptr ? "" : value);
             }
 
             gameOptionNode = gameOptionNode->NextSiblingElement("option");
@@ -1318,7 +1330,77 @@ std::vector<Option> Config::getOptions(const std::string &gameName) {
 }
 
 std::vector<Option> Config::getOptions(Game *game) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     return this->getOptions(game->getGameName());
+}
+
+ConfigOptionSnapshot Config::getOptionsSnapshot(const std::string &game) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
+    return ConfigOptionSnapshot {
+        .revision = this->revision,
+        .options = this->getOptions(game),
+    };
+}
+
+ConfigOptionUpdateResult Config::updateOptions(
+        const std::string &game,
+        uint32_t expected_revision,
+        const std::vector<std::pair<std::string, std::string>> &changes) {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
+
+    if (expected_revision != this->revision) {
+        return ConfigOptionUpdateResult::Stale;
+    }
+    if (changes.empty()) {
+        return ConfigOptionUpdateResult::Success;
+    }
+
+    auto *rootNode = this->configFile.RootElement();
+    if (rootNode == nullptr || std::string(rootNode->Name()) != "games") {
+        return ConfigOptionUpdateResult::SaveFailed;
+    }
+
+    auto *gameNode = rootNode->FirstChildElement("game");
+    while (gameNode != nullptr) {
+        const auto *name = gameNode->Attribute("name");
+        if (name != nullptr && std::string(name) == game) {
+            break;
+        }
+        gameNode = gameNode->NextSiblingElement("game");
+    }
+    if (gameNode == nullptr) {
+        gameNode = this->configFile.NewElement("game");
+        gameNode->SetAttribute("name", game.c_str());
+        rootNode->InsertEndChild(gameNode);
+    }
+
+    auto *optionsNode = gameNode->FirstChildElement("options");
+    if (optionsNode == nullptr) {
+        optionsNode = this->configFile.NewElement("options");
+        gameNode->InsertEndChild(optionsNode);
+    }
+
+    for (const auto &[name, value] : changes) {
+        auto *optionNode = optionsNode->FirstChildElement("option");
+        while (optionNode != nullptr) {
+            const auto *optionName = optionNode->Attribute("name");
+            if (optionName != nullptr && name == optionName) {
+                break;
+            }
+            optionNode = optionNode->NextSiblingElement("option");
+        }
+        if (optionNode == nullptr) {
+            optionNode = this->configFile.NewElement("option");
+            optionNode->SetAttribute("name", name.c_str());
+            optionsNode->InsertEndChild(optionNode);
+        }
+        optionNode->SetAttribute("value", value.c_str());
+    }
+
+    if (!this->saveConfigFile()) {
+        return ConfigOptionUpdateResult::SaveFailed;
+    }
+    return ConfigOptionUpdateResult::Success;
 }
 
 /////////////////////////
@@ -1326,6 +1408,7 @@ std::vector<Option> Config::getOptions(Game *game) {
 /////////////////////////
 
 bool Config::createConfigFile() {
+    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     std::ofstream ofsConfig;
     ofsConfig.open(this->configLocationTemp);
     if (!ofsConfig.is_open() || ofsConfig.fail() || ofsConfig.bad()) {
@@ -1346,16 +1429,18 @@ bool Config::firstFillConfigFile() {
     tinyxml2::XMLNode *rootNode = this->configFile.NewElement("games");
     this->configFile.InsertEndChild(rootNode);
 
-    this->saveConfigFile();
-    return true;
+    return this->saveConfigFile();
 }
 
-void Config::saveConfigFile() {
+bool Config::saveConfigFile() {
     // write the new config to a .tmp file first...
     const auto xml_result = this->configFile.SaveFile(this->configLocationTemp.c_str(), false);
     if (xml_result != tinyxml2::XMLError::XML_SUCCESS) {
         log_info("cfg", "failed to write file: {}", this->configLocationTemp);
-        return;
+        if (this->savedConfigValid) {
+            this->savedConfigFile.DeepCopy(&this->configFile);
+        }
+        return false;
     }
 
     // ...flush the .tmp file to disk so a crash/power loss can't leave it half-written...
@@ -1377,6 +1462,14 @@ void Config::saveConfigFile() {
             this->configLocation.c_str(),
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
         log_warning("cfg", "MoveFileExW failed: 0x{:08x}", GetLastError());
-        return;
+        if (this->savedConfigValid) {
+            this->savedConfigFile.DeepCopy(&this->configFile);
+        }
+        return false;
     }
+
+    this->configFile.DeepCopy(&this->savedConfigFile);
+    this->savedConfigValid = true;
+    ++this->revision;
+    return true;
 }

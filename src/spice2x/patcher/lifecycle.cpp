@@ -1,6 +1,7 @@
 #include "internal.h"
 
 #include <algorithm>
+#include <atomic>
 #include <windows.h>
 
 #include "avs/game.h"
@@ -10,6 +11,102 @@
 #include "util/utils.h"
 
 namespace patcher {
+
+    static std::recursive_mutex PATCH_MANAGER_STATE_MUTEX;
+    static std::atomic_bool loader_reload_pending = false;
+    static std::atomic_bool state_release_barrier = false;
+    static thread_local size_t state_lock_depth = 0;
+    static thread_local bool state_draining_pending = false;
+    static thread_local bool loader_notification_active = false;
+    static thread_local bool loader_callback_scope = false;
+
+    struct LoaderNotificationScope {
+        bool &active;
+
+        explicit LoaderNotificationScope(bool &active) : active(active) {
+            active = true;
+        }
+
+        ~LoaderNotificationScope() {
+            active = false;
+        }
+    };
+
+    struct LoaderCallbackScope {
+        bool &active;
+
+        explicit LoaderCallbackScope(bool &active) : active(active) {
+            active = true;
+        }
+
+        ~LoaderCallbackScope() {
+            active = false;
+        }
+    };
+
+#ifdef PATCHER_TEST_HOOKS
+    void patcher_test_after_mutex_unlock();
+#endif
+
+    static void reload_pending_patches() {
+        LoaderNotificationScope notification_scope(loader_notification_active);
+        reload_local_patches(true);
+    }
+
+    static void release_state_lock(std::unique_lock<std::recursive_mutex> &lock);
+
+    static void release_state_lock(std::unique_lock<std::recursive_mutex> &lock) {
+        state_release_barrier.store(true, std::memory_order_seq_cst);
+        state_draining_pending = true;
+        while (loader_reload_pending.exchange(false, std::memory_order_acq_rel)) {
+            reload_pending_patches();
+        }
+
+        // Keep the barrier published while the mutex changes hands. Notifications that arrive
+        // in this window publish pending work and return without trying to take the lock.
+        // The test hook makes this handoff deterministic without affecting production builds.
+        lock.unlock();
+#ifdef PATCHER_TEST_HOOKS
+        patcher_test_after_mutex_unlock();
+#endif
+        state_release_barrier.store(false, std::memory_order_seq_cst);
+
+        // Once the barrier is down, a free-state callback either reloads immediately or leaves
+        // pending work for the temporary owner below; in both cases this loop closes the handoff.
+        while (loader_reload_pending.exchange(false, std::memory_order_acq_rel)) {
+            StateLock reacquired;
+            reload_pending_patches();
+        }
+        state_draining_pending = false;
+    }
+
+    StateLock::StateLock() : lock(PATCH_MANAGER_STATE_MUTEX) {
+        outermost = state_lock_depth++ == 0;
+    }
+
+    StateLock::StateLock(std::try_to_lock_t)
+        : lock(PATCH_MANAGER_STATE_MUTEX, std::try_to_lock) {
+        if (lock.owns_lock()) {
+            outermost = state_lock_depth++ == 0;
+        }
+    }
+
+    StateLock::~StateLock() {
+        if (!lock.owns_lock()) {
+            return;
+        }
+        const bool drain = outermost && state_lock_depth == 1;
+        --state_lock_depth;
+        if (drain
+            && !state_draining_pending
+            && !loader_callback_scope) {
+            release_state_lock(lock);
+        }
+    }
+
+    bool StateLock::owns_lock() const {
+        return lock.owns_lock();
+    }
 
     std::optional<std::string> PATCH_MANAGER_CFG_PATH_OVERRIDE;
 
@@ -56,6 +153,7 @@ namespace patcher {
     std::vector<std::string> ldr_target_libraries;
 
     void init() {
+        StateLock lock;
         if (PATCH_MANAGER_CFG_PATH_OVERRIDE.has_value()) {
             config_path = fileutils::expand_config_path(PATCH_MANAGER_CFG_PATH_OVERRIDE.value());
             log_info("patchmanager", "using custom config file path: {}", config_path);
@@ -96,15 +194,27 @@ namespace patcher {
     }
 
     void apply_patches_on_start() {
-        if (!local_patches_initialized) {
+        StateLock lock;
+        const bool pending = loader_reload_pending.exchange(false, std::memory_order_acq_rel);
+        if (!local_patches_initialized || pending) {
             reload_local_patches(true);
         }
+    }
+
+    bool process_pending_loader_reload() {
+        StateLock lock;
+        if (!loader_reload_pending.exchange(false, std::memory_order_acq_rel)) {
+            return false;
+        }
+        reload_local_patches(true);
+        return true;
     }
 
     VOID CALLBACK loader_notification(
         ULONG reason,
         PCLDR_DLL_NOTIFICATION_DATA data,
         PVOID) {
+        LoaderCallbackScope callback_scope(loader_callback_scope);
 
         if (reason == LDR_DLL_NOTIFICATION_REASON_LOADED) {
             const auto dll = strtolower(std::filesystem::path({
@@ -113,6 +223,29 @@ namespace patcher {
             }).filename().string());
 
             if (std::ranges::find(ldr_target_libraries, dll) != ldr_target_libraries.end()) {
+                // The outer reload covers every target library; coalesce re-entrant callbacks to
+                // avoid recursively reloading while the loader lock is already held.
+                if (loader_notification_active) {
+                    return;
+                }
+                // Publish before trying the state lock. A contending outer scope either drains
+                // this event or a free-state callback consumes it immediately.
+                loader_reload_pending.store(true, std::memory_order_release);
+                if (state_release_barrier.load(std::memory_order_acquire)) {
+                    return;
+                }
+                if (state_lock_depth != 0) {
+                    return;
+                }
+                StateLock lock(std::try_to_lock);
+                if (!lock.owns_lock()) {
+                    return;
+                }
+                if (state_release_barrier.load(std::memory_order_acquire)) {
+                    return;
+                }
+                loader_reload_pending.exchange(false, std::memory_order_acq_rel);
+                LoaderNotificationScope notification_scope(loader_notification_active);
                 reload_local_patches(true);
             }
         }

@@ -1,6 +1,8 @@
 #include "card.h"
 #include <fstream>
 #include <functional>
+#include <cmath>
+#include "cfg/card_manager.h"
 #include "external/rapidjson/document.h"
 #include "util/logging.h"
 #include "util/utils.h"
@@ -13,7 +15,7 @@ using namespace rapidjson;
 namespace api::modules {
 
     static bool normalize_card_id(const std::string &value, std::string &card_id) {
-        if (value.size() != 16) {
+        if (value.size() != 16 || value.find('\0') != std::string::npos) {
             return false;
         }
 
@@ -39,7 +41,97 @@ namespace api::modules {
     Card::Card() : Module("card") {
         functions["get_cards"] = std::bind(&Card::get_cards, this, _1, _2);
         functions["insert"] = std::bind(&Card::insert, this, _1, _2);
+        functions["manager_get"] = std::bind(&Card::manager_get, this, _1, _2);
+        functions["manager_save"] = std::bind(&Card::manager_save, this, _1, _2);
+        functions["manager_set_active"] = std::bind(&Card::manager_set_active, this, _1, _2);
         require_password("get_cards");
+        require_password("manager_get");
+        require_password("manager_save");
+        require_password("manager_set_active");
+    }
+
+    void Card::add_manager_state(Response &res) {
+        auto &store = cfg::CardManagerStore::get();
+        std::lock_guard<std::recursive_mutex> lock(store.mutex);
+        if (!store.load_error.empty()) return error(res, store.load_error);
+        auto &alloc = res.doc()->GetAllocator();
+        Value state(kObjectType), cards(kArrayType), active(kArrayType);
+        state.AddMember("revision", store.revision, alloc);
+        for (const auto &entry : store.cards) {
+            Value card(kObjectType), color(kArrayType);
+            card.AddMember("name", Value(entry.name.c_str(), alloc), alloc);
+            card.AddMember("id", Value(entry.id.c_str(), alloc), alloc);
+            for (float channel : entry.color) color.PushBack(channel, alloc);
+            card.AddMember("color", color, alloc);
+            cards.PushBack(card, alloc);
+        }
+        {
+            std::lock_guard<std::mutex> overrides_lock(CARD_OVERRIDES_LOCK);
+            for (const auto &id : CARD_OVERRIDES) active.PushBack(Value(id.c_str(), alloc), alloc);
+        }
+        state.AddMember("cards", cards, alloc);
+        state.AddMember("active", active, alloc);
+        res.add_data(state);
+    }
+
+    void Card::manager_get(Request &req, Response &res) {
+        if (!req.params.Empty()) return error(res, "manager_get takes no parameters.");
+        add_manager_state(res);
+    }
+
+    void Card::manager_save(Request &req, Response &res) {
+        if (req.params.Size() != 2 || !req.params[0].IsUint64() || !req.params[1].IsArray()) {
+            return error(res, "Expected revision and cards array.");
+        }
+        if (req.params[1].Size() > 4096) return error(res, "At most 4096 cards can be saved per request.");
+        std::vector<cfg::CardEntry> cards;
+        for (const auto &value : req.params[1].GetArray()) {
+            if (!value.IsObject() || value.MemberCount() != 3 ||
+                    !value.HasMember("name") || !value["name"].IsString() || value["name"].GetStringLength() > 256 ||
+                    !value.HasMember("id") || !value["id"].IsString() ||
+                    !value.HasMember("color") || !value["color"].IsArray() || value["color"].Size() != 3) {
+                return error(res, "Expected card name, 16-character id and RGB color.");
+            }
+            cfg::CardEntry entry;
+            entry.name.assign(value["name"].GetString(), value["name"].GetStringLength());
+            const std::string id(value["id"].GetString(), value["id"].GetStringLength());
+            if (entry.name.find('\0') != std::string::npos || !normalize_card_id(id, entry.id)) {
+                return error(res, "Invalid card id/name.");
+            }
+            for (SizeType i = 0; i < 3; i++) {
+                const auto &channel = value["color"][i];
+                if (!channel.IsNumber() || !std::isfinite(channel.GetDouble()) ||
+                        channel.GetDouble() < 0 || channel.GetDouble() > 1) {
+                    return error(res, "Card color must contain three numbers from 0 to 1.");
+                }
+                entry.color[i] = channel.GetFloat();
+            }
+            entry.search_string = strtolower(entry.name) + " " + strtolower(entry.id);
+            cards.emplace_back(std::move(entry));
+        }
+        std::string failure;
+        auto &store = cfg::CardManagerStore::get();
+        std::lock_guard<std::recursive_mutex> lock(store.mutex);
+        if (!store.replace(req.params[0].GetUint64(), std::move(cards), failure)) return error(res, failure);
+        add_manager_state(res);
+    }
+
+    void Card::manager_set_active(Request &req, Response &res) {
+        if (req.params.Size() != 2 || !req.params[0].IsUint() || req.params[0].GetUint() > 1 ||
+                !req.params[1].IsString()) {
+            return error(res, "Expected reader 0 or 1 and a card id (empty clears the override).");
+        }
+        const std::string value(req.params[1].GetString(), req.params[1].GetStringLength());
+        std::string id;
+        if (!value.empty() && !normalize_card_id(value, id)) return error(res, "Invalid card id.");
+        auto &store = cfg::CardManagerStore::get();
+        std::lock_guard<std::recursive_mutex> lock(store.mutex);
+        if (!store.load_error.empty()) return error(res, store.load_error);
+        {
+            std::lock_guard<std::mutex> overrides_lock(CARD_OVERRIDES_LOCK);
+            CARD_OVERRIDES[req.params[0].GetUint()] = id;
+        }
+        add_manager_state(res);
     }
 
     /**
@@ -98,11 +190,14 @@ namespace api::modules {
 
         // get params
         auto index = req.params[0].GetUint();
-        auto card_hex = req.params[1].GetString();
+        std::string card_hex;
+        if (!normalize_card_id(std::string(req.params[1].GetString(), req.params[1].GetStringLength()), card_hex)) {
+            return error_type(res, "card_id", "hex string");
+        }
 
         // convert to binary
         uint8_t card_bin[8] {};
-        if (!hex2bin(card_hex, card_bin)) {
+        if (!hex2bin(card_hex.c_str(), card_bin)) {
             return error_type(res, "card_id", "hex string");
         }
 

@@ -19,6 +19,8 @@
 #include "modules/analogs.h"
 #include "modules/buttons.h"
 #include "modules/card.h"
+#include "modules/config.h"
+#include "modules/patches.h"
 #include "modules/capture.h"
 #include "modules/coin.h"
 #include "modules/control.h"
@@ -411,6 +413,8 @@ void Controller::init_state(api::ClientState *state) {
     state->modules.push_back(new modules::Analogs());
     state->modules.push_back(new modules::Buttons());
     state->modules.push_back(new modules::Card());
+    state->modules.push_back(new modules::Config());
+    state->modules.push_back(new modules::Patches());
     state->modules.push_back(new modules::Capture());
     state->modules.push_back(new modules::Coin());
     state->modules.push_back(new modules::Control());
