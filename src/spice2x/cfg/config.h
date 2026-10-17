@@ -35,7 +35,6 @@ public:
     static Config &getInstance();
     bool getStatus();
     bool createConfigFile();
-    uint32_t getRevision() const;
 
     bool addGame(Game &game, bool save = true);
 

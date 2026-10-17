@@ -146,7 +146,7 @@ int main() {
 
     auto &config = ::Config::getInstance();
     assert(config.getStatus());
-    assert(config.getRevision() == 0);
+    assert(config.getOptionsSnapshot("Test Game").revision == 0);
 
     api::modules::Config module;
     assert(module.password_force);
@@ -164,11 +164,11 @@ int main() {
     result = call(module, "get_options", "[\"missing\"]");
     assert(!result["errors"].Empty() && result["data"].Empty());
 
-    auto revision = config.getRevision();
+    auto revision = config.getOptionsSnapshot("Test Game").revision;
     assert(config.updateOptions("Test Game", revision, {
         {"apipass", "secret"}, {"enabled", "/ENABLED"}, {"mode", "on"}, {"mask", "0x10"}
     }) == ConfigOptionUpdateResult::Success);
-    revision = config.getRevision();
+    revision = config.getOptionsSnapshot("Test Game").revision;
 
     result = call(module, "get_options", "[\"Test Game\"]");
     assert(result["errors"].Empty());
@@ -189,7 +189,7 @@ int main() {
         "{\"name\":\"enabled\",\"value\":\"true\"}]]");
     assert(!result["errors"].Empty() && result["data"].Empty());
     assert(text_file(config_path) == before_invalid);
-    assert(config.getRevision() == revision);
+    assert(config.getOptionsSnapshot("Test Game").revision == revision);
 
     result = call(module, "set_options", "[\"Test Game\"," + std::to_string(revision) +
         ", [{\"name\":\"text\",\"value\":\"changed\",\"extra\":1}]]");
@@ -228,7 +228,7 @@ int main() {
     assert(config.updateOptions("Test Game", revision, {{"text", "native"}}) ==
         ConfigOptionUpdateResult::Success);
     const auto stale_revision = revision;
-    revision = config.getRevision();
+    revision = config.getOptionsSnapshot("Test Game").revision;
     result = set_text(module, stale_revision, "stale");
     assert(!result["errors"].Empty() && result["data"].Empty());
     result = call(module, "get_options", "[\"Test Game\"]");
@@ -247,7 +247,7 @@ int main() {
     assert(text_file(config_path) == before_failed_save);
     assert(std::string(option(call(module, "get_options", "[\"Test Game\"]"), "text")["value"].GetString()) == "saved");
 
-    const auto concurrent_revision = config.getRevision();
+    const auto concurrent_revision = config.getOptionsSnapshot("Test Game").revision;
     std::atomic<int> successes = 0;
     std::atomic<int> stale = 0;
     auto concurrent_set = [&](const char *value) {
@@ -264,7 +264,7 @@ int main() {
     second.join();
     assert(successes == 1 && stale == 1);
 
-    const auto native_revision = config.getRevision();
+    const auto native_revision = config.getOptionsSnapshot("Test Game").revision;
     assert(config.save());
     result = set_text(module, native_revision, "after-native-save");
     assert(!result["errors"].Empty() && result["data"].Empty());

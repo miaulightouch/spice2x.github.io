@@ -111,11 +111,6 @@ bool Config::getStatus() {
     return this->status;
 }
 
-uint32_t Config::getRevision() const {
-    std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
-    return this->revision;
-}
-
 bool Config::addGame(Game &game, bool save) {
     std::lock_guard<std::recursive_mutex> lock(this->config_mutex);
     tinyxml2::XMLNode *rootNode = this->configFile.LastChild();
