@@ -295,5 +295,15 @@
   "preview.title": "Screen preview",
   "preview.screen": "Screen {n}",
   "preview.empty": "No capture loaded.",
-  "preview.hint": "Direct3D 9 capture. Refresh manually; OpenGL capture is not yet supported."
+  "preview.hint": "Direct3D 9 capture. Refresh manually; OpenGL capture is not yet supported.",
+  "patches.importUrl": "Patch source URL",
+  "patches.import": "Import",
+  "patches.importing": "Importing…",
+  "patches.importMode": "URL import is available only in standalone spicecfg.",
+  "patches.importUnavailable": "Use an updated spice2x build and select a game DLL in spicecfg.",
+  "patches.importHint": "The source receives the game datecode and DLL version identifiers.",
+  "msg.patchesImported": "Patches imported.",
+  "error.patchUrl": "Use an HTTP(S) base URL without credentials, query or fragment.",
+  "error.patchImportMode": "URL import is unavailable on this host.",
+  "error.patchImportUnknown": "Import result unknown. Reload patches before retrying. {detail}"
 }

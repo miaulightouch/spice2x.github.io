@@ -165,6 +165,8 @@ summary { min-height: 44px; padding-block: 12px; cursor: pointer; color: var(--a
 .feature-group h2 { margin-bottom: 8px; }
 .feature-field,.patch-item { display: grid; gap: 5px; }
 .patch-toolbar .button-row { align-items: center; }
+.patch-import,.import-errors { margin-bottom: 10px; }
+.import-errors { white-space: pre-wrap; overflow-wrap: anywhere; }
 .patch-item { margin-top: 10px; overflow-wrap: anywhere; }
 .patch-item .field-header { flex-wrap: wrap; }
 .feature-field { padding: 10px 0; border-top: 1px solid var(--line); }

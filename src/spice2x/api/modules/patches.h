@@ -15,5 +15,6 @@ namespace api::modules {
         void set_auto_apply(Request &req, Response &res);
         void save(Request &req, Response &res);
         void reload(Request &req, Response &res);
+        void import_url(Request &req, Response &res);
     };
 }

@@ -1,4 +1,5 @@
 import { isRecord } from './client';
+import { LocalizedError } from '../i18n';
 
 export type OptionType = 'bool' | 'text' | 'integer' | 'hex' | 'enum';
 
@@ -59,7 +60,22 @@ export interface PatchState {
   auto_apply: boolean;
   dirty: boolean;
   standalone: boolean;
+  can_import: boolean;
+  import_url: string;
+  recent_urls: string[];
+  import_errors: string;
   patches: PatchEntry[];
+}
+
+export function normalizePatchUrl(value: string): string {
+  const text = value.trim();
+  try {
+    if (/[\u0000-\u0020\u007f]/.test(text)) throw new Error();
+    const url = new URL(text);
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password ||
+        url.href.includes('?') || url.href.includes('#') || url.href.length > 4096) throw new Error();
+    return url.href;
+  } catch { throw new LocalizedError('error.patchUrl'); }
 }
 
 export interface ManagedCard {
@@ -197,6 +213,10 @@ export function parsePatches(data: unknown[]): PatchState {
     auto_apply: boolValue(value.auto_apply, 'auto_apply'),
     dirty: boolValue(value.dirty, 'dirty'),
     standalone: boolValue(value.standalone, 'standalone'),
+    can_import: value.can_import === undefined ? false : boolValue(value.can_import, 'can_import'),
+    import_url: value.import_url === undefined ? '' : stringValue(value.import_url, 'import_url'),
+    recent_urls: value.recent_urls === undefined ? [] : arrayValue(value.recent_urls, 'recent_urls').map((url, index) => stringValue(url, `recent_urls[${index}]`)),
+    import_errors: value.import_errors === undefined ? '' : stringValue(value.import_errors, 'import_errors'),
     patches: value.patches.map((raw, index) => {
       if (!isRecord(raw) || !PATCH_TYPES.includes(raw.type as PatchType) || !PATCH_STATUS.includes(raw.status as PatchStatus)) {
         return fail(`Invalid patch ${index}`);
