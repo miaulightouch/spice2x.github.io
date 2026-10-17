@@ -29,6 +29,8 @@ namespace patcher {
     inline std::recursive_mutex patches_test_mutex;
     inline bool patches_test_apply_failure = false;
     inline bool patches_test_force_status_error = false;
+    inline bool patches_test_force_integer_status_error = false;
+    inline bool patches_test_force_integer_unverified = false;
     inline int patches_test_fail_on_apply_call = 0;
     inline int patches_test_apply_calls = 0;
     inline bool patches_test_save_failure = false;
@@ -86,9 +88,14 @@ namespace patcher {
     }
 
     inline PatchStatus is_patch_active(PatchData &patch) {
-        if (patches_test_apply_failure || patches_test_force_status_error) {
+        if (patches_test_apply_failure || patches_test_force_status_error
+                || (patches_test_force_integer_status_error
+                    && patch.type == PatchType::Integer)) {
             patch.error_reason = "test apply failure";
             return PatchStatus::Error;
+        }
+        if (patches_test_force_integer_unverified && patch.type == PatchType::Integer) {
+            patch.unverified = true;
         }
         return patch.enabled ? PatchStatus::Enabled : PatchStatus::Disabled;
     }

@@ -20,27 +20,16 @@ namespace patcher {
     static thread_local bool loader_notification_active = false;
     static thread_local bool loader_callback_scope = false;
 
-    struct LoaderNotificationScope {
+    struct FlagScope {
         bool &active;
+        const bool previous;
 
-        explicit LoaderNotificationScope(bool &active) : active(active) {
+        explicit FlagScope(bool &active) : active(active), previous(active) {
             active = true;
         }
 
-        ~LoaderNotificationScope() {
-            active = false;
-        }
-    };
-
-    struct LoaderCallbackScope {
-        bool &active;
-
-        explicit LoaderCallbackScope(bool &active) : active(active) {
-            active = true;
-        }
-
-        ~LoaderCallbackScope() {
-            active = false;
+        ~FlagScope() {
+            active = previous;
         }
     };
 
@@ -49,16 +38,16 @@ namespace patcher {
 #endif
 
     static void reload_pending_patches() {
-        LoaderNotificationScope notification_scope(loader_notification_active);
+        FlagScope notification_scope(loader_notification_active);
         reload_local_patches(true);
     }
 
-    static void release_state_lock(std::unique_lock<std::recursive_mutex> &lock);
-
     static void release_state_lock(std::unique_lock<std::recursive_mutex> &lock) {
+        // The barrier and pending publication share one total order, so a callback that
+        // sees the barrier cannot publish work after the final drain.
         state_release_barrier.store(true, std::memory_order_seq_cst);
         state_draining_pending = true;
-        while (loader_reload_pending.exchange(false, std::memory_order_acq_rel)) {
+        while (loader_reload_pending.exchange(false, std::memory_order_seq_cst)) {
             reload_pending_patches();
         }
 
@@ -73,7 +62,7 @@ namespace patcher {
 
         // Once the barrier is down, a free-state callback either reloads immediately or leaves
         // pending work for the temporary owner below; in both cases this loop closes the handoff.
-        while (loader_reload_pending.exchange(false, std::memory_order_acq_rel)) {
+        while (loader_reload_pending.exchange(false, std::memory_order_seq_cst)) {
             StateLock reacquired;
             reload_pending_patches();
         }
@@ -195,7 +184,7 @@ namespace patcher {
 
     void apply_patches_on_start() {
         StateLock lock;
-        const bool pending = loader_reload_pending.exchange(false, std::memory_order_acq_rel);
+        const bool pending = loader_reload_pending.exchange(false, std::memory_order_seq_cst);
         if (!local_patches_initialized || pending) {
             reload_local_patches(true);
         }
@@ -203,7 +192,7 @@ namespace patcher {
 
     bool process_pending_loader_reload() {
         StateLock lock;
-        if (!loader_reload_pending.exchange(false, std::memory_order_acq_rel)) {
+        if (!loader_reload_pending.exchange(false, std::memory_order_seq_cst)) {
             return false;
         }
         reload_local_patches(true);
@@ -214,7 +203,7 @@ namespace patcher {
         ULONG reason,
         PCLDR_DLL_NOTIFICATION_DATA data,
         PVOID) {
-        LoaderCallbackScope callback_scope(loader_callback_scope);
+        FlagScope callback_scope(loader_callback_scope);
 
         if (reason == LDR_DLL_NOTIFICATION_REASON_LOADED) {
             const auto dll = strtolower(std::filesystem::path({
@@ -230,8 +219,8 @@ namespace patcher {
                 }
                 // Publish before trying the state lock. A contending outer scope either drains
                 // this event or a free-state callback consumes it immediately.
-                loader_reload_pending.store(true, std::memory_order_release);
-                if (state_release_barrier.load(std::memory_order_acquire)) {
+                loader_reload_pending.store(true, std::memory_order_seq_cst);
+                if (state_release_barrier.load(std::memory_order_seq_cst)) {
                     return;
                 }
                 if (state_lock_depth != 0) {
@@ -241,11 +230,11 @@ namespace patcher {
                 if (!lock.owns_lock()) {
                     return;
                 }
-                if (state_release_barrier.load(std::memory_order_acquire)) {
+                if (state_release_barrier.load(std::memory_order_seq_cst)) {
                     return;
                 }
-                loader_reload_pending.exchange(false, std::memory_order_acq_rel);
-                LoaderNotificationScope notification_scope(loader_notification_active);
+                loader_reload_pending.exchange(false, std::memory_order_seq_cst);
+                FlagScope notification_scope(loader_notification_active);
                 reload_local_patches(true);
             }
         }

@@ -55,6 +55,8 @@ int main() {
     patcher::setting_auto_apply = false;
     patcher::patches_test_apply_failure = false;
     patcher::patches_test_force_status_error = false;
+    patcher::patches_test_force_integer_status_error = false;
+    patcher::patches_test_force_integer_unverified = false;
     patcher::patches_test_fail_on_apply_call = 0;
     patcher::patches_test_apply_calls = 0;
     patcher::patches_test_save_failure = false;
@@ -115,6 +117,44 @@ int main() {
     assert(std::string(result["data"][0]["patches"][0]["status"].GetString()) == "enabled");
     assert(patcher::setting_auto_apply);
     assert(patcher::config_dirty);
+
+    // Runtime errors invalidate the observed integer value, but retain its bounds and
+    // leave a separate usable patch visible in the same response.
+    patcher::patches[3].patch_number.min = 10;
+    patcher::patches[3].patch_number.max = 20;
+    patcher::patches[3].patch_number.value = 0;
+    patcher::patches[3].unverified = false;
+    patcher::patches_test_force_integer_status_error = true;
+    result = call(module, "get");
+    assert(result["errors"].Empty());
+    const auto &runtime_error_integer = result["data"][0]["patches"][3];
+    assert(runtime_error_integer["min"].GetInt() == 10);
+    assert(runtime_error_integer["max"].GetInt() == 20);
+    assert(!runtime_error_integer.HasMember("value"));
+    assert(std::string(runtime_error_integer["status"].GetString()) == "error");
+    assert(runtime_error_integer["unverified"].GetBool() == false);
+    assert(std::string(result["data"][0]["patches"][0]["status"].GetString()) == "enabled");
+    assert(result["data"][0]["patches"][0]["error"].GetStringLength() == 0);
+    patcher::patches_test_force_integer_status_error = false;
+
+    // Standalone fatal errors report the requested enabled state as unverified; the
+    // integer value is still unknown and must remain absent.
+    patcher::patches[3].patch_number.value = 0;
+    patcher::patches[3].unverified = false;
+    patcher::patches_test_force_integer_unverified = true;
+    result = call(module, "get");
+    assert(result["errors"].Empty());
+    const auto &unverified_integer = result["data"][0]["patches"][3];
+    assert(unverified_integer["min"].GetInt() == 10);
+    assert(unverified_integer["max"].GetInt() == 20);
+    assert(!unverified_integer.HasMember("value"));
+    assert(unverified_integer["unverified"].GetBool());
+    assert(std::string(result["data"][0]["patches"][0]["status"].GetString()) == "enabled");
+    patcher::patches_test_force_integer_unverified = false;
+    patcher::patches[3].unverified = false;
+    patcher::patches[3].patch_number.min = 1;
+    patcher::patches[3].patch_number.max = 10;
+    patcher::patches[3].patch_number.value = 3;
 
     patcher::patches_test_apply_failure = true;
     patcher::patches_test_apply_calls = 0;

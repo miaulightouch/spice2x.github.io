@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <functional>
 #include <iostream>
 #include <thread>
 
@@ -11,8 +12,11 @@ namespace patcher {
     std::atomic_bool patches_lifecycle_hook_enabled = false;
     std::atomic_bool patches_lifecycle_hook_entered = false;
     std::atomic_bool patches_lifecycle_hook_continue = false;
+    std::atomic_int patches_lifecycle_unlock_count = 0;
+    std::function<void()> patches_lifecycle_on_reload;
 
     void patcher_test_after_mutex_unlock() {
+        ++patches_lifecycle_unlock_count;
         if (!patches_lifecycle_hook_enabled.load(std::memory_order_acquire)) {
             return;
         }
@@ -28,6 +32,7 @@ namespace patcher {
     void reload_local_patches(bool apply_patches) {
         assert(apply_patches);
         ++patches_lifecycle_reload_count;
+        if (patches_lifecycle_on_reload) patches_lifecycle_on_reload();
     }
 
     std::vector<std::string> getExtraDlls(const std::string &) {
@@ -52,6 +57,19 @@ int main() {
     patcher::loader_notification(
         LDR_DLL_NOTIFICATION_REASON_LOADED, &data, nullptr);
     assert(patcher::patches_lifecycle_reload_count == 1);
+
+    // A nested notification must preserve the outer loader-callback scope. Otherwise
+    // the state-lock destructor starts its potentially blocking drain under the loader lock.
+    patcher::patches_lifecycle_on_reload = [&] {
+        patcher::loader_notification(
+            LDR_DLL_NOTIFICATION_REASON_LOADED, &data, nullptr);
+    };
+    patcher::loader_notification(
+        LDR_DLL_NOTIFICATION_REASON_LOADED, &data, nullptr);
+    patcher::patches_lifecycle_on_reload = {};
+    assert(patcher::patches_lifecycle_reload_count == 2);
+    assert(patcher::patches_lifecycle_unlock_count == 0);
+    patcher::patches_lifecycle_reload_count = 1;
 
     // A same-thread loader re-entry queues without waiting; the outer scope drains it.
     {

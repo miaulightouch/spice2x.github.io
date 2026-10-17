@@ -130,7 +130,9 @@ namespace api::modules {
             if (patch.type == patcher::PatchType::Integer) {
                 item.AddMember("min", patch.patch_number.min, allocator);
                 item.AddMember("max", patch.patch_number.max, allocator);
-                item.AddMember("value", patch.patch_number.value, allocator);
+                if (patch.last_status != patcher::PatchStatus::Error && !patch.unverified) {
+                    item.AddMember("value", patch.patch_number.value, allocator);
+                }
             }
             patch_list.PushBack(item, allocator);
         }
