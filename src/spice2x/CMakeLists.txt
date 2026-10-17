@@ -411,9 +411,10 @@ if(EXISTS "${SPICE_CONTROLLER_SOURCE_DIR}/package.json" AND NOT SPICE_CONTROLLER
     find_program(SPICE_NPM_EXECUTABLE npm)
     if(SPICE_NODE_EXECUTABLE AND SPICE_NPM_EXECUTABLE)
         message(STATUS "Building embedded controller HTML with host Node.js (target toolchains do not run Node)")
+        # Keep npm.cmd from replacing MSBuild's generated batch script.
         add_custom_command(OUTPUT "${SPICE_CONTROLLER_HTML}"
-                COMMAND "${SPICE_NPM_EXECUTABLE}" ci
-                COMMAND "${SPICE_NPM_EXECUTABLE}" run build:embedded
+                COMMAND "${CMAKE_COMMAND}" -E env "${SPICE_NPM_EXECUTABLE}" ci
+                COMMAND "${CMAKE_COMMAND}" -E env "${SPICE_NPM_EXECUTABLE}" run build:embedded
                 WORKING_DIRECTORY "${SPICE_CONTROLLER_SOURCE_DIR}"
                 DEPENDS ${SPICE_CONTROLLER_INPUTS}
                 COMMENT "Building embedded controller HTML"
