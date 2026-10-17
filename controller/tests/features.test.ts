@@ -116,7 +116,7 @@ test('card manager and I/O parsers preserve masked and numeric values', () => {
   assert.throws(() => parseCardManager([{ revision: 1.5, cards: [], active: ['', ''] }]));
   assert.throws(() => parseCardManager([{ revision: -1, cards: [], active: ['', ''] }]));
   assert.throws(() => parseIoAnalogs([['Knob', 1.1, false]]));
-  assert.match(generateCardId(), /^[0-9A-F]{16}$/);
+  assert.match(generateCardId(), /^E0040100[0-9A-F]{8}$/);
 });
 
 test('staged option draft keeps its values and base revision across refreshes', () => {

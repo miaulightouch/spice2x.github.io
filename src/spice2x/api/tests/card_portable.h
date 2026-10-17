@@ -7,7 +7,10 @@
 #include <fstream>
 #include <iterator>
 #include <mutex>
+#include <memory>
 #include <string>
+#include <vector>
+#include "cfg/option.h"
 #include "external/fmt/include/fmt/format.h"
 
 #define log_info(...) ((void)0)
@@ -20,6 +23,14 @@ inline unsigned card_insert_reader = 0;
 inline uint8_t card_insert_data[8] {};
 inline std::mutex CARD_OVERRIDES_LOCK;
 inline std::string CARD_OVERRIDES[2];
+inline std::unique_ptr<std::vector<Option>> LAUNCHER_OPTIONS;
+
+namespace launcher::Options {
+    enum {
+        Player1Card = 6,
+        Player2Card = 7,
+    };
+}
 
 inline std::string strtolower(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });

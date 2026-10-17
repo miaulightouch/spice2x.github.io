@@ -12,7 +12,10 @@ ADAPTERS = {
     "api/module.cpp": ["util/logging.h"],
     "api/request.cpp": ["../util/logging.h"],
     "api/response.cpp": ["util/logging.h"],
-    "api/modules/card.cpp": ["misc/eamuse.h", "util/logging.h", "util/utils.h"],
+    "api/modules/card.cpp": [
+        "misc/eamuse.h", "launcher/launcher.h", "launcher/options.h",
+        "util/logging.h", "util/utils.h",
+    ],
     "cfg/card_manager.cpp": ["util/fileutils.h", "util/logging.h", "util/utils.h"],
 }
 
@@ -51,7 +54,7 @@ def main():
             "-I" + str(ROOT / "api/modules"), "-I" + str(ROOT / "cfg"), "-I" + str(temp),
             *sources, str(test), "-o", str(binary),
         ], check=True)
-        for mode in ("missing", "legacy", "invalid", "invalid-color", "invalid-id"):
+        for mode in ("missing", "legacy", "invalid", "invalid-color", "invalid-id", "invalid-startup"):
             fixture = temp / mode
             fixture.mkdir()
             subprocess.run([str(binary), mode], cwd=fixture, check=True)

@@ -4,12 +4,16 @@
 #include <cctype>
 #include <cstdint>
 #include <functional>
+#include <set>
 #include <string>
+#include <utility>
 
 #include "avs/game.h"
 #include "cfg/configurator.h"
 #include "external/rapidjson/document.h"
+#include "launcher/launcher.h"
 #include "patcher/patch_manager.h"
+#include "util/utils.h"
 
 using namespace std::placeholders;
 using namespace rapidjson;
@@ -113,10 +117,14 @@ namespace api::modules {
     Patches::Patches() : Module("patches", true) {
         functions["get"] = std::bind(&Patches::get, this, _1, _2);
         functions["set"] = std::bind(&Patches::set, this, _1, _2);
+        functions["set_group"] = std::bind(&Patches::set_group, this, _1, _2);
+        functions["disable_all"] = std::bind(&Patches::disable_all, this, _1, _2);
         functions["set_auto_apply"] = std::bind(&Patches::set_auto_apply, this, _1, _2);
         functions["save"] = std::bind(&Patches::save, this, _1, _2);
         functions["reload"] = std::bind(&Patches::reload, this, _1, _2);
         functions["import_url"] = std::bind(&Patches::import_url, this, _1, _2);
+        functions["remove_recent_url"] = std::bind(&Patches::remove_recent_url, this, _1, _2);
+        functions["clear_recent_urls"] = std::bind(&Patches::clear_recent_urls, this, _1, _2);
     }
 
     static void prepare() {
@@ -150,6 +158,36 @@ namespace api::modules {
         }
         game.AddMember("recent_urls", recent_urls, allocator);
 
+        Value identity(kObjectType);
+        const auto game_identifier = avs::game::get_identifier();
+        identity.AddMember("game_identifier", Value(game_identifier.c_str(), allocator), allocator);
+        std::string pe_identifier;
+        if (!avs::game::DLL_NAME.empty()) {
+            pe_identifier = patcher::get_game_identifier(MODULE_PATH / avs::game::DLL_NAME);
+        }
+        identity.AddMember("pe_identifier", Value(pe_identifier.c_str(), allocator), allocator);
+        identity.AddMember("patch_file", Value(patcher::ACTIVE_JSON_FILE.c_str(), allocator), allocator);
+        game.AddMember("identity", identity, allocator);
+
+        Value groups(kArrayType);
+        std::set<std::pair<std::string, std::string>> group_keys;
+        for (const auto &patch : patcher::patches) {
+            const auto *group = patcher::find_patch_group(patch);
+            const auto game_code = ::strtolower(patch.game_code);
+            const auto group_key = std::make_pair(game_code, patch.group_id);
+            if (!group || !group_keys.insert(group_key).second) {
+                continue;
+            }
+            Value item(kObjectType);
+            item.AddMember("game_code", Value(game_code.c_str(), allocator), allocator);
+            item.AddMember("id", Value(patch.group_id.c_str(), allocator), allocator);
+            item.AddMember("name", Value(group->name.c_str(), allocator), allocator);
+            item.AddMember("description", Value(group->description.c_str(), allocator), allocator);
+            item.AddMember("caution", Value(group->caution.c_str(), allocator), allocator);
+            groups.PushBack(item, allocator);
+        }
+        game.AddMember("groups", groups, allocator);
+
         Value patch_list(kArrayType);
         for (auto &patch : patcher::patches) {
             if (patch_type_name(patch.type) == nullptr) {
@@ -174,6 +212,8 @@ namespace api::modules {
             item.AddMember("name", Value(patch.name.c_str(), allocator), allocator);
             item.AddMember("description", Value(patch.description.c_str(), allocator), allocator);
             item.AddMember("caution", Value(patch.caution.c_str(), allocator), allocator);
+            const auto game_code = ::strtolower(patch.game_code);
+            item.AddMember("game_code", Value(game_code.c_str(), allocator), allocator);
             item.AddMember("group", Value(patch.group_id.c_str(), allocator), allocator);
             item.AddMember("type", Value(patch_type_name(patch.type), allocator), allocator);
             item.AddMember("enabled", patch.enabled, allocator);
@@ -378,6 +418,94 @@ namespace api::modules {
         add_state(res);
     }
 
+    void Patches::set_group(Request &req, Response &res) {
+        patcher::StateLock lock;
+        if (!exact_params(req, 3, *this, res)) {
+            return;
+        }
+        if (!req.params[0].IsString()) {
+            return error_type(res, "game_code", "string");
+        }
+        if (!req.params[1].IsString()) {
+            return error_type(res, "id", "string");
+        }
+        if (!req.params[2].IsBool()) {
+            return error_type(res, "enabled", "bool");
+        }
+
+        prepare();
+        const auto game_code = ::strtolower(
+            std::string(req.params[0].GetString(), req.params[0].GetStringLength()));
+        const std::string group_id(req.params[1].GetString(), req.params[1].GetStringLength());
+        const bool enabled = req.params[2].GetBool();
+        bool found = false;
+        bool failed = false;
+        std::string failure;
+        for (auto &patch : patcher::patches) {
+            const auto *group = patcher::find_patch_group(patch);
+            if (!group || ::strtolower(patch.game_code) != game_code || patch.group_id != group_id) {
+                continue;
+            }
+            found = true;
+            patch.error_reason.clear();
+            patch.enabled = enabled;
+            if (enabled) {
+                patcher::setting_auto_apply = true;
+            }
+            const bool applied = patcher::apply_patch(patch, enabled);
+            patch.last_status = patcher::is_patch_active(patch);
+            const auto wanted_status = enabled
+                ? patcher::PatchStatus::Enabled
+                : patcher::PatchStatus::Disabled;
+            if (!applied || patch.last_status != wanted_status) {
+                failed = true;
+                if (failure.empty()) {
+                    failure = patch.error_reason.empty() ? "Failed to apply patch group" : patch.error_reason;
+                }
+            }
+        }
+        if (!found) {
+            return error_unknown(res, "group", game_code + "/" + group_id);
+        }
+        patcher::config_dirty = true;
+        add_state(res);
+        if (failed) {
+            error(res, failure.empty() ? "Failed to apply one or more patches in group." : failure);
+        }
+    }
+
+    void Patches::disable_all(Request &req, Response &res) {
+        patcher::StateLock lock;
+        if (!exact_params(req, 0, *this, res)) {
+            return;
+        }
+        if (!cfg::CONFIGURATOR_STANDALONE) {
+            return error(res, "Disable all patches is only available in standalone configurator mode.");
+        }
+
+        prepare();
+        patcher::config_dirty = true;
+        patcher::setting_auto_apply = false;
+        for (auto &patch : patcher::patches) {
+            patch.last_status = patcher::is_patch_active(patch);
+            if (!patch.enabled) {
+                continue;
+            }
+            patch.enabled = false;
+            switch (patch.last_status) {
+                case patcher::PatchStatus::Enabled:
+                case patcher::PatchStatus::Disabled:
+                    patcher::apply_patch(patch, false);
+                    patch.last_status = patcher::is_patch_active(patch);
+                    break;
+                case patcher::PatchStatus::Error:
+                default:
+                    break;
+            }
+        }
+        add_state(res);
+    }
+
     void Patches::set_auto_apply(Request &req, Response &res) {
         patcher::StateLock lock;
         if (!exact_params(req, 1, *this, res)) {
@@ -459,6 +587,59 @@ namespace api::modules {
         }
         if (save_failed) {
             return error(res, "Patches imported, but unable to save patch settings.");
+        }
+        add_state(res);
+    }
+
+    void Patches::remove_recent_url(Request &req, Response &res) {
+        patcher::StateLock lock;
+        if (!exact_params(req, 1, *this, res)) {
+            return;
+        }
+        if (!req.params[0].IsString()) {
+            return error_type(res, "url", "string");
+        }
+        if (!cfg::CONFIGURATOR_STANDALONE) {
+            return error(res, "Patch URL history is only available in standalone configurator mode.");
+        }
+        const std::string url(req.params[0].GetString(), req.params[0].GetStringLength());
+        prepare();
+        const auto it = std::find(patcher::url_recents.begin(), patcher::url_recents.end(), url);
+        if (it != patcher::url_recents.end()) {
+            const auto old_recents = patcher::url_recents;
+            const auto old_recent_idx = patcher::url_recent_idx;
+            patcher::url_recents.erase(it);
+            patcher::url_recent_idx = static_cast<size_t>(-1);
+            if (!patcher::config_save()) {
+                patcher::url_recents = old_recents;
+                patcher::url_recent_idx = old_recent_idx;
+                add_state(res);
+                return error(res, "Unable to save patch URL history.");
+            }
+        }
+        add_state(res);
+    }
+
+    void Patches::clear_recent_urls(Request &req, Response &res) {
+        patcher::StateLock lock;
+        if (!exact_params(req, 0, *this, res)) {
+            return;
+        }
+        if (!cfg::CONFIGURATOR_STANDALONE) {
+            return error(res, "Patch URL history is only available in standalone configurator mode.");
+        }
+        prepare();
+        if (!patcher::url_recents.empty()) {
+            const auto old_recents = patcher::url_recents;
+            const auto old_recent_idx = patcher::url_recent_idx;
+            patcher::url_recents.clear();
+            patcher::url_recent_idx = static_cast<size_t>(-1);
+            if (!patcher::config_save()) {
+                patcher::url_recents = old_recents;
+                patcher::url_recent_idx = old_recent_idx;
+                add_state(res);
+                return error(res, "Unable to save patch URL history.");
+            }
         }
         add_state(res);
     }

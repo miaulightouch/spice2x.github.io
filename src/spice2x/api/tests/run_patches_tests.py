@@ -21,7 +21,8 @@ def main():
             "api/request.cpp": ["../util/logging.h"],
             "api/response.cpp": ["util/logging.h"],
             "api/modules/patches.cpp": [
-                "avs/game.h", "cfg/configurator.h", "patcher/patch_manager.h",
+                "avs/game.h", "cfg/configurator.h", "patcher/patch_manager.h", "launcher/launcher.h",
+                "util/utils.h",
             ],
         }
         for name, includes in adapters.items():
@@ -34,6 +35,16 @@ def main():
             target = temp / name.replace("/", "_")
             target.write_text(content)
             sources.append(str(target))
+
+        loader_group = (ROOT / "patcher/loader_group.cpp").read_text()
+        for include in ['"internal.h"', '"util/logging.h"', '"util/utils.h"']:
+            original = "#include " + include
+            if original not in loader_group:
+                raise RuntimeError("Platform include changed: " + original)
+            loader_group = loader_group.replace(original, '#include "patches_portable.h"')
+        loader_group_source = temp / "patcher_loader_group.cpp"
+        loader_group_source.write_text(loader_group)
+        sources.append(str(loader_group_source))
 
         executable = temp / "patches_tests"
         command = [

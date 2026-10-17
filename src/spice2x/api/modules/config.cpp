@@ -5,16 +5,21 @@
 #include <functional>
 #include <limits>
 #include <set>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "external/rapidjson/document.h"
 #include "cfg/config.h"
 #include "games/io.h"
+#include "hooks/audio/asio_driver_scan.h"
 #include "launcher/launcher.h"
 #include "launcher/options.h"
 #include "misc/eamuse.h"
+#include "util/sysutils.h"
+#include "util/utils.h"
 
 using namespace std::placeholders;
 using namespace rapidjson;
@@ -99,6 +104,19 @@ const char *option_type_name(OptionType type) {
     return "text";
 }
 
+const char *option_picker_name(OptionPickerType picker) {
+    switch (picker) {
+        case OptionPickerType::AsioDriver: return "asio_driver";
+        case OptionPickerType::EACard: return "ea_card";
+        case OptionPickerType::CpuAffinity: return "cpu_affinity";
+        case OptionPickerType::FilePath: return "file_path";
+        case OptionPickerType::DirectoryPath: return "directory_path";
+        case OptionPickerType::Monitor: return "monitor";
+        case OptionPickerType::None: return "none";
+    }
+    return "none";
+}
+
 bool valid_uint32(const std::string &value) {
     if (value.empty()) {
         return true;
@@ -156,9 +174,81 @@ bool valid_value(const OptionDefinition &definition, const std::string &value) {
     return false;
 }
 
+std::string hex_value(uint64_t value) {
+    std::ostringstream output;
+    output << "0x" << std::uppercase << std::hex << value;
+    return output.str();
+}
+
+unsigned option_cpu_count() {
+#ifdef _WIN32
+    SYSTEM_INFO info{};
+    GetSystemInfo(&info);
+    return info.dwNumberOfProcessors;
+#else
+    return std::thread::hardware_concurrency();
+#endif
+}
+
+void add_picker_choice(
+        Value &choices, Document::AllocatorType &alloc,
+        const std::string &value, const std::string &label) {
+    Value choice(kObjectType);
+    choice.AddMember("value", json_string(value, alloc), alloc);
+    choice.AddMember("label", json_string(label, alloc), alloc);
+    choices.PushBack(choice, alloc);
+}
+
+void add_dynamic_choices(
+        Value &choices, Document::AllocatorType &alloc, OptionPickerType picker) {
+    switch (picker) {
+        case OptionPickerType::AsioDriver: {
+            for (const auto &driver : hooks::audio::scan_asio_drivers()) {
+                const char *arch = (driver.found_32bit && driver.found_64bit)
+                    ? "32/64-bit"
+                    : (driver.found_64bit ? "64-bit" : "32-bit");
+                add_picker_choice(choices, alloc, driver.name,
+                    driver.name + " (" + arch + ")");
+            }
+            break;
+        }
+        case OptionPickerType::CpuAffinity: {
+            auto cpu_count = option_cpu_count();
+            if (cpu_count == 0) {
+                cpu_count = 1;
+            }
+            // CpuAffinity is stored as a uint64 bitmask by the native picker.
+            // Keep the API choices aligned with that representation.
+            const auto max_choices = static_cast<unsigned>(std::numeric_limits<uint64_t>::digits);
+            for (unsigned i = 0; i < std::min(cpu_count, max_choices); i++) {
+                const auto mask = uint64_t{1} << i;
+                add_picker_choice(choices, alloc, hex_value(mask), "CPU " + std::to_string(i));
+            }
+            break;
+        }
+        case OptionPickerType::Monitor: {
+            for (const auto &monitor : sysutils::enumerate_monitors()) {
+                auto label = monitor.display_name;
+                const auto friendly = wchar_to_u8(monitor.friendly_name.c_str());
+                if (!friendly.empty()) {
+                    label += " (" + friendly + ")";
+                }
+                if (monitor.is_primary) {
+                    label += " [Primary]";
+                }
+                add_picker_choice(choices, alloc, monitor.display_name, label);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
 void add_options(Response &res, const std::string &game, const ConfigOptionSnapshot &snapshot) {
     auto &alloc = res.doc()->GetAllocator();
     const auto options = effective_options(snapshot, game);
+    std::set<std::string> quick_category_names;
     Value result(kObjectType);
     result.AddMember("game", json_string(game, alloc), alloc);
     result.AddMember("revision", snapshot.revision, alloc);
@@ -173,6 +263,12 @@ void add_options(Response &res, const std::string &game, const ConfigOptionSnaps
         item.AddMember("description", json_string(definition.desc, alloc), alloc);
         item.AddMember("category", json_string(definition.category, alloc), alloc);
         item.AddMember("type", StringRef(option_type_name(definition.type)), alloc);
+        item.AddMember("display_name", json_string(definition.display_name, alloc), alloc);
+        item.AddMember("setting_name", json_string(definition.setting_name, alloc), alloc);
+        item.AddMember("quick_setting_category",
+            json_string(definition.quick_setting_category, alloc), alloc);
+        item.AddMember("picker", StringRef(option_picker_name(definition.picker)), alloc);
+        item.AddMember("file_extension", json_string(definition.file_extension, alloc), alloc);
         auto output_value = definition.sensitive ? json_string("", alloc) : json_string(option.value, alloc);
         item.AddMember("value", output_value, alloc);
         item.AddMember("sensitive", definition.sensitive, alloc);
@@ -189,7 +285,18 @@ void add_options(Response &res, const std::string &game, const ConfigOptionSnaps
         }
         item.AddMember("elements", elements, alloc);
         option_list.PushBack(item, alloc);
+
+        if (!(definition.hidden && option.value.empty()) && !definition.quick_setting_category.empty()) {
+            quick_category_names.insert(definition.quick_setting_category);
+        }
     }
+    Value quick_categories(kArrayType);
+    for (const auto &category : launcher::get_quick_setting_categories()) {
+        if (quick_category_names.contains(category)) {
+            quick_categories.PushBack(json_string(category, alloc), alloc);
+        }
+    }
+    result.AddMember("quick_categories", quick_categories, alloc);
     result.AddMember("options", option_list, alloc);
     res.add_data(result);
 }
@@ -201,6 +308,7 @@ namespace api::modules {
 Config::Config() : Module("config", true) {
     functions["get_games"] = std::bind(&Config::get_games, this, _1, _2);
     functions["get_options"] = std::bind(&Config::get_options, this, _1, _2);
+    functions["get_option_choices"] = std::bind(&Config::get_option_choices, this, _1, _2);
     functions["set_options"] = std::bind(&Config::set_options, this, _1, _2);
 }
 
@@ -233,6 +341,55 @@ void Config::get_options(Request &req, Response &res) {
     }
 
     add_options(res, game, ::Config::getInstance().getOptionsSnapshot(game));
+}
+
+void Config::get_option_choices(Request &req, Response &res) {
+    if (req.params.Size() != 2) {
+        return error(res, "expected [game:string, name:string]");
+    }
+
+    std::string game;
+    if (!read_string(req.params[0], game)) {
+        return error_type(res, "game", "string of bounded length without NUL");
+    }
+    if (!is_known_game(game)) {
+        return error_unknown(res, "game", game);
+    }
+
+    std::string name;
+    if (!read_string(req.params[1], name)) {
+        return error_type(res, "name", "string of bounded length without NUL");
+    }
+    const auto *definition = find_definition(name);
+    if (definition == nullptr) {
+        return error_unknown(res, "option", name);
+    }
+
+    const auto options = effective_options(
+        ::Config::getInstance().getOptionsSnapshot(game), game);
+    const auto *option = find_option(options, name);
+    if (option == nullptr) {
+        return error_unknown(res, "option", name);
+    }
+    if (definition->disabled || option->disabled) {
+        return error(res, "option is disabled: " + name);
+    }
+    switch (definition->picker) {
+        case OptionPickerType::AsioDriver:
+        case OptionPickerType::CpuAffinity:
+        case OptionPickerType::Monitor:
+            break;
+        default:
+            return error(res, "option has no dynamic choices: " + name);
+    }
+
+    auto &alloc = res.doc()->GetAllocator();
+    Value result(kObjectType);
+    result.AddMember("name", json_string(name, alloc), alloc);
+    Value choices(kArrayType);
+    add_dynamic_choices(choices, alloc, definition->picker);
+    result.AddMember("choices", choices, alloc);
+    res.add_data(result);
 }
 
 void Config::set_options(Request &req, Response &res) {

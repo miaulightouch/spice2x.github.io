@@ -14,7 +14,8 @@ ADAPTERS = {
     "api/request.cpp": ["../util/logging.h"],
     "api/response.cpp": ["util/logging.h"],
     "api/modules/config.cpp": [
-        "cfg/config.h", "games/io.h", "launcher/launcher.h", "launcher/options.h", "misc/eamuse.h",
+        "cfg/config.h", "games/io.h", "hooks/audio/asio_driver_scan.h", "launcher/launcher.h",
+        "launcher/options.h", "misc/eamuse.h", "util/sysutils.h", "util/utils.h",
     ],
     "cfg/config.cpp": ["config.h", "util/logging.h", "util/fileutils.h"],
 }

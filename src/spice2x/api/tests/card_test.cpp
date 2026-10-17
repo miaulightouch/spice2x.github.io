@@ -26,6 +26,7 @@ static Document call(api::modules::Card &module, const std::string &function, co
 
 static const std::string card_a = "{\"name\":\"Player A\",\"id\":\"e004010000000001\",\"color\":[0,0.5,1]}";
 static const std::string card_b = "{\"name\":\"Player B\",\"id\":\"E004010000000002\",\"color\":[1,0,0]}";
+static constexpr char command_line_card[] = "E004010000000099";
 static const std::string path = "spicetools_card_manager.json";
 
 static void expect_error(const Document &result) {
@@ -45,6 +46,15 @@ int main(int argc, char **argv) {
     } else if (mode == "invalid-id") {
         std::ofstream(path) << "{\"pages\":[{\"cards\":[{\"name\":\"Bad\",\"id\":\"E004\\u000001000000000\"}]}]}";
     }
+    if (!mode.starts_with("invalid") || mode == "invalid-startup") {
+        LAUNCHER_OPTIONS = std::make_unique<std::vector<Option>>();
+        for (size_t index = 0; index <= launcher::Options::Player2Card; index++) {
+            LAUNCHER_OPTIONS->emplace_back(OptionDefinition {}, "");
+        }
+        const auto startup_card = mode == "invalid-startup" ? "not-a-card" : command_line_card;
+        (*LAUNCHER_OPTIONS)[launcher::Options::Player1Card].value = startup_card;
+        CARD_OVERRIDES[0] = startup_card;
+    }
     api::modules::Card module;
     assert(module.requires_password("get_cards"));
     assert(module.requires_password("manager_get"));
@@ -52,7 +62,7 @@ int main(int argc, char **argv) {
     assert(module.requires_password("manager_set_active"));
     assert(!module.requires_password("insert"));
 
-    if (mode.starts_with("invalid")) {
+    if (mode.starts_with("invalid") && mode != "invalid-startup") {
         const auto before = fileutils::text_read(path);
         expect_error(call(module, "manager_get"));
         expect_error(call(module, "manager_save", "[0,[" + card_a + "]]"));
@@ -63,11 +73,25 @@ int main(int argc, char **argv) {
     }
     auto initial = call(module, "manager_get");
     assert(initial["errors"].Empty());
+    if (mode == "invalid-startup") {
+        assert(initial["data"][0]["read_only"].Empty());
+        std::cout << "Invalid startup card is omitted from read-only state\n";
+        return 0;
+    }
+    assert(initial["data"][0]["read_only"].Size() == 1);
+    assert(std::string(initial["data"][0]["read_only"][0]["source"].GetString()) == "-card0");
+    assert(std::string(initial["data"][0]["read_only"][0]["id"].GetString()) == command_line_card);
     assert(initial["data"][0]["cards"].Size() == (mode == "legacy" ? 2u : 0u));
     if (mode == "legacy") {
         assert(std::string(initial["data"][0]["cards"][0]["id"].GetString()) == "E004010000000001");
         assert(initial["data"][0]["cards"][0]["color"][1].GetDouble() == 0.5);
     }
+    auto selected_saved = call(module, "manager_set_active", "[0,\"e004010000000001\"]");
+    assert(selected_saved["errors"].Empty());
+    assert(std::string(selected_saved["data"][0]["active"][0].GetString())
+            == "E004010000000001");
+    assert(std::string(selected_saved["data"][0]["read_only"][0]["id"].GetString())
+            == command_line_card);
     expect_error(call(module, "manager_get", "[0]"));
     auto saved = call(module, "manager_save", "[0,[" + card_a + "," + card_b + "]]" );
     assert(saved["errors"].Empty());
@@ -77,6 +101,12 @@ int main(int argc, char **argv) {
     stored.Parse(disk.c_str());
     assert(stored["pages"][0]["cards"].Size() == 2);
     assert(std::string(stored["pages"][0]["cards"][0]["id"].GetString()) == "E004010000000001");
+
+    auto selected_command_line = call(module, "manager_set_active", "[0,\"E004010000000099\"]");
+    assert(selected_command_line["errors"].Empty());
+    assert(std::string(selected_command_line["data"][0]["active"][0].GetString()) == command_line_card);
+    auto selected_saved_again = call(module, "manager_set_active", "[0,\"E004010000000001\"]");
+    assert(selected_saved_again["errors"].Empty());
 
     for (const auto &params : std::vector<std::string> {
         "[0,[]]", "[-1,[]]", "[1,{},0]",

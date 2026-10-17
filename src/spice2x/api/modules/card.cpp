@@ -4,6 +4,8 @@
 #include <cmath>
 #include "cfg/card_manager.h"
 #include "external/rapidjson/document.h"
+#include "launcher/launcher.h"
+#include "launcher/options.h"
 #include "util/logging.h"
 #include "util/utils.h"
 #include "misc/eamuse.h"
@@ -38,6 +40,20 @@ namespace api::modules {
         return normalize_card_id(std::string(buffer, std::size(buffer)), card_id);
     }
 
+    // CARD_OVERRIDES is mutable by manager_set_active; launcher options retain startup CLI values.
+    static std::string launcher_card_override(size_t index) {
+        if (!LAUNCHER_OPTIONS || index > 1) return {};
+        const auto option_index = index == 0
+                ? launcher::Options::Player1Card
+                : launcher::Options::Player2Card;
+        if (LAUNCHER_OPTIONS->size() <= static_cast<size_t>(option_index)) return {};
+        const auto &option = LAUNCHER_OPTIONS->at(option_index);
+        std::string card_id;
+        return option.is_active() && normalize_card_id(option.value, card_id)
+                ? card_id
+                : std::string();
+    }
+
     Card::Card() : Module("card") {
         functions["get_cards"] = std::bind(&Card::get_cards, this, _1, _2);
         functions["insert"] = std::bind(&Card::insert, this, _1, _2);
@@ -55,7 +71,7 @@ namespace api::modules {
         std::lock_guard<std::recursive_mutex> lock(store.mutex);
         if (!store.load_error.empty()) return error(res, store.load_error);
         auto &alloc = res.doc()->GetAllocator();
-        Value state(kObjectType), cards(kArrayType), active(kArrayType);
+        Value state(kObjectType), cards(kArrayType), active(kArrayType), read_only(kArrayType);
         state.AddMember("revision", store.revision, alloc);
         for (const auto &entry : store.cards) {
             Value card(kObjectType), color(kArrayType);
@@ -67,10 +83,27 @@ namespace api::modules {
         }
         {
             std::lock_guard<std::mutex> overrides_lock(CARD_OVERRIDES_LOCK);
-            for (const auto &id : CARD_OVERRIDES) active.PushBack(Value(id.c_str(), alloc), alloc);
+            const auto keypad_count = eamuse_get_game_keypads();
+            for (size_t index = 0; index < std::size(CARD_OVERRIDES); index++) {
+                const auto &id = CARD_OVERRIDES[index];
+                active.PushBack(Value(index < static_cast<size_t>(keypad_count) ? id.c_str() : "", alloc), alloc);
+                const auto startup_id = launcher_card_override(index);
+                if (index >= static_cast<size_t>(keypad_count) || startup_id.empty()) {
+                    continue;
+                }
+                Value card(kObjectType);
+                const auto name = std::string("P") + std::to_string(index + 1)
+                        + " Default (-card" + std::to_string(index) + ")";
+                const auto source = std::string("-card") + std::to_string(index);
+                card.AddMember("name", Value(name.c_str(), alloc), alloc);
+                card.AddMember("id", Value(startup_id.c_str(), alloc), alloc);
+                card.AddMember("source", Value(source.c_str(), alloc), alloc);
+                read_only.PushBack(card, alloc);
+            }
         }
         state.AddMember("cards", cards, alloc);
         state.AddMember("active", active, alloc);
+        state.AddMember("read_only", read_only, alloc);
         res.add_data(state);
     }
 
@@ -118,6 +151,7 @@ namespace api::modules {
 
     void Card::manager_set_active(Request &req, Response &res) {
         if (req.params.Size() != 2 || !req.params[0].IsUint() || req.params[0].GetUint() > 1 ||
+                req.params[0].GetUint() >= static_cast<unsigned>(eamuse_get_game_keypads()) ||
                 !req.params[1].IsString()) {
             return error(res, "Expected reader 0 or 1 and a card id (empty clears the override).");
         }

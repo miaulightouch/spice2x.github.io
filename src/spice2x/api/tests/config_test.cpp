@@ -18,7 +18,9 @@ using namespace rapidjson;
 namespace {
 
 const std::vector<OptionDefinition> TEST_DEFINITIONS {
-    {.title = "API Port", .name = "api", .desc = "port", .type = OptionType::Integer, .category = "API"},
+    {.title = "API Port", .name = "api", .display_name = "api-port", .desc = "port",
+        .type = OptionType::Integer, .setting_name = "8080", .category = "API",
+        .file_extension = "ini", .quick_setting_category = "Common"},
     {.title = "API Password", .name = "apipass", .desc = "password", .type = OptionType::Text,
         .category = "API", .sensitive = true},
     {.title = "Enabled", .name = "enabled", .desc = "enabled", .type = OptionType::Bool, .category = "General"},
@@ -32,6 +34,14 @@ const std::vector<OptionDefinition> TEST_DEFINITIONS {
         .category = "General", .disabled = true},
     {.title = "Hidden", .name = "hidden", .desc = "hidden", .type = OptionType::Bool,
         .hidden = true, .category = "General"},
+    {.title = "ASIO", .name = "asio", .desc = "asio", .type = OptionType::Text,
+        .category = "Audio", .picker = OptionPickerType::AsioDriver, .quick_setting_category = "Audio"},
+    {.title = "Monitor", .name = "monitor", .desc = "monitor", .type = OptionType::Text,
+        .category = "Display", .picker = OptionPickerType::Monitor, .quick_setting_category = "Display"},
+    {.title = "CPU Affinity", .name = "cpuaffinity", .desc = "cpu", .type = OptionType::Hex,
+        .category = "Performance", .picker = OptionPickerType::CpuAffinity},
+    {.title = "EA Card", .name = "eacard", .desc = "card", .type = OptionType::Text,
+        .category = "Network", .picker = OptionPickerType::EACard},
     {.title = "Other Game", .name = "other", .desc = "other", .type = OptionType::Text,
         .game_name = "Other Game", .category = "Game"},
 };
@@ -130,6 +140,15 @@ const std::string &eamuse_get_game() {
     return TEST_CURRENT_GAME;
 }
 
+namespace launcher {
+const std::vector<std::string> &get_quick_setting_categories() {
+    static const std::vector<std::string> categories {
+        "Game", "Common", "Network", "Display", "Audio",
+    };
+    return categories;
+}
+}
+
 int main() {
     const auto config_path = std::filesystem::current_path() / "spicetools.xml";
     std::ofstream(config_path) <<
@@ -152,6 +171,7 @@ int main() {
     assert(module.password_force);
     assert(module.requires_password("get_games"));
     assert(module.requires_password("get_options"));
+    assert(module.requires_password("get_option_choices"));
     assert(module.requires_password("set_options"));
 
     auto result = call(module, "get_games", "[]");
@@ -179,9 +199,39 @@ int main() {
     assert(option(result, "apipass")["has_value"].GetBool());
     assert(std::string(option(result, "enabled")["value"].GetString()) == "/ENABLED");
     assert(std::string(option(result, "mode")["value"].GetString()) == "on");
+    assert(std::string(option(result, "api")["display_name"].GetString()) == "api-port");
+    assert(std::string(option(result, "api")["setting_name"].GetString()) == "8080");
+    assert(std::string(option(result, "api")["quick_setting_category"].GetString()) == "Common");
+    assert(std::string(option(result, "api")["picker"].GetString()) == "none");
+    assert(std::string(option(result, "api")["file_extension"].GetString()) == "ini");
+    assert(result["data"][0]["quick_categories"].IsArray());
+    assert(result["data"][0]["quick_categories"].Size() == 3);
+    assert(std::string(result["data"][0]["quick_categories"][0].GetString()) == "Common");
+    assert(std::string(result["data"][0]["quick_categories"][1].GetString()) == "Display");
+    assert(std::string(result["data"][0]["quick_categories"][2].GetString()) == "Audio");
     assert(option(result, "hidden")["hidden"].GetBool());
     assert(option(result, "override")["disabled"].GetBool());
     assert(!has_option(result, "other"));
+
+    result = call(module, "get_option_choices", "[\"Test Game\",\"asio\"]");
+    assert(result["errors"].Empty() && result["data"].Size() == 1);
+    assert(std::string(result["data"][0]["name"].GetString()) == "asio");
+    assert(result["data"][0]["choices"].Size() == 2);
+    assert(std::string(result["data"][0]["choices"][0]["value"].GetString()) == "Test ASIO");
+    assert(std::string(result["data"][0]["choices"][0]["label"].GetString()) ==
+        "Test ASIO (32/64-bit)");
+    result = call(module, "get_option_choices", "[\"Test Game\",\"monitor\"]");
+    assert(result["errors"].Empty() && result["data"][0]["choices"].Size() == 1);
+    assert(std::string(result["data"][0]["choices"][0]["value"].GetString()) ==
+        "\\\\.\\DISPLAY1");
+    assert(std::string(result["data"][0]["choices"][0]["label"].GetString()) ==
+        "\\\\.\\DISPLAY1 (Test Monitor) [Primary]");
+    result = call(module, "get_option_choices", "[\"Test Game\",\"cpuaffinity\"]");
+    assert(result["errors"].Empty() && result["data"][0]["choices"].Size() >= 1);
+    assert(std::string(result["data"][0]["choices"][0]["value"].GetString()) == "0x1");
+    assert(std::string(result["data"][0]["choices"][0]["label"].GetString()) == "CPU 0");
+    result = call(module, "get_option_choices", "[\"Test Game\",\"eacard\"]");
+    assert(!result["errors"].Empty() && result["data"].Empty());
 
     const auto before_invalid = text_file(config_path);
     result = call(module, "set_options", "[\"Test Game\"," + std::to_string(revision) +

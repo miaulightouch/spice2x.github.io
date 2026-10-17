@@ -12,6 +12,7 @@ namespace api::modules {
     private:
         void get_games(Request &req, Response &res);
         void get_options(Request &req, Response &res);
+        void get_option_choices(Request &req, Response &res);
         void set_options(Request &req, Response &res);
     };
 }

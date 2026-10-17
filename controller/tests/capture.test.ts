@@ -51,10 +51,15 @@ async function captureServer() {
   let frameSeen!: () => void;
   let releaseFrame!: () => void;
   let frameWait = Promise.resolve();
+  let holdStreams = false;
+  let failStreams = false;
+  let streamsSeen!: () => void;
+  let releaseStreams!: () => void;
+  let streamsWait = Promise.resolve();
   server.on('connection', socket => {
     let cipher: Rc4 | undefined;
-    const send = (request: CaptureRequest, data: unknown[]): void => {
-      const bytes = new TextEncoder().encode(JSON.stringify({ id: request.id, errors: [], data }) + '\0');
+    const send = (request: CaptureRequest, data: unknown[], errors: string[] = []): void => {
+      const bytes = new TextEncoder().encode(JSON.stringify({ id: request.id, errors, data }) + '\0');
       socket.send(cipher ? cipher.crypt(bytes) : bytes);
     };
     socket.on('message', async raw => {
@@ -68,6 +73,12 @@ async function captureServer() {
       if (request.module === 'capture' && request.function === 'get_jpg') {
         if (holdFrame) { frameSeen(); await frameWait; }
         send(request, [99, 1280, 720, 'YWJj']); return;
+      }
+      if (request.module === 'capture' && request.function === 'get_streams') {
+        if (holdStreams) { streamsSeen(); await streamsWait; }
+        send(request, [{ port: 1340, formats: [{ name: 'mjpeg', path: '/stream.mjpg' }],
+          screens: [{ screen: 1, width: 1280, height: 720, busy: false }] }], failStreams ? ['stream failed'] : []);
+        return;
       }
       if (request.module === 'buttons' && request.function === 'read') { send(request, []); return; }
       if (request.module === 'info' && request.function === 'avs') { send(request, [{ model: 'TEST' }]); return; }
@@ -90,8 +101,14 @@ async function captureServer() {
       return new Promise<void>(resolve => { frameSeen = resolve; });
     },
     release(): void { holdFrame = false; releaseFrame?.(); },
+    holdNextStreams(fail = false): Promise<void> {
+      holdStreams = true; failStreams = fail;
+      streamsWait = new Promise<void>(resolve => { releaseStreams = resolve; });
+      return new Promise<void>(resolve => { streamsSeen = resolve; });
+    },
+    releaseStreams(): void { holdStreams = false; releaseStreams?.(); },
     async close(): Promise<void> {
-      releaseFrame?.();
+      releaseFrame?.(); releaseStreams?.();
       for (const client of server.clients) client.terminate();
       await new Promise<void>(resolve => server.close(() => resolve()));
     },
@@ -131,4 +148,18 @@ test('controller lists screens, captures the selected one and drops a stale fram
     controller.disconnect();
     await server.close();
   }
+});
+
+test('stopping a stream invalidates late success and failure responses on the real encrypted client', async () => {
+  const server = await captureServer(), controller = useController();
+  try {
+    await controller.connect({ id: 'stream', name: 'Stream', endpoint: server.endpoint, password: '', rememberPassword: false });
+    for (const fail of [false, true]) {
+      const seen = server.holdNextStreams(fail);
+      const pending = controller.startStream();
+      await seen; controller.stopStream(); server.releaseStreams(); await pending;
+      assert.equal(controller.streamUrl.value, '');
+      assert.equal(controller.error.value, '');
+    }
+  } finally { controller.disconnect(); await server.close(); }
 });

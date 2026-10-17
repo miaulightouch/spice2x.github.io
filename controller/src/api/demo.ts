@@ -42,7 +42,9 @@ export class DemoApi implements Rpc {
     if (module === 'buttons') {
       if (fn === 'read') return [...this.buttons].map(([name, enabled]) => [name, enabled ? 1 : 0, enabled]);
       if (fn === 'write') for (const [name, pressed] of params as [string, boolean][]) this.buttons.set(name, pressed);
-      if (fn === 'write_reset') for (const name of this.buttons.keys()) this.buttons.set(name, false);
+      if (fn === 'write_reset') for (const name of this.buttons.keys()) {
+        if (!params.length || params.some(row => Array.isArray(row) && row[0] === name)) this.buttons.set(name, false);
+      }
       if (fn === 'pulse') {
         const name = String(params[0]); this.buttons.set(name, true);
         try { await new Promise(resolve => setTimeout(resolve, Number(params[1] ?? 180))); }
@@ -77,7 +79,7 @@ export class DemoApi implements Rpc {
     if (module === 'config') {
       if (fn === 'get_games') return [{ current: 'DEMO', games: ['DEMO'] }];
       if (fn === 'get_options') return [{ game: String(params[0] ?? 'DEMO'), revision: this.optionRevision, restart_required: true,
-        options: [{ name: 'demo-enabled', title: 'Demo option', description: 'A safe demo option.', category: 'Demo', type: 'bool',
+        quick_categories: ['Common'], options: [{ name: 'demo-enabled', title: 'Demo option', description: 'A safe demo option.', category: 'Demo', quick_setting_category: 'Common', type: 'bool',
           value: this.optionValues.get('demo-enabled') ?? '', sensitive: false, has_value: !!this.optionValues.get('demo-enabled'),
           hidden: false, disabled: false, elements: [] }] }];
       if (fn === 'set_options') {
@@ -91,16 +93,21 @@ export class DemoApi implements Rpc {
       }
     }
     if (module === 'patches') {
-      const patch = { id: 'demo-patch', name: 'Demo patch', description: 'A safe demo patch.', caution: '', group: 'Demo', type: 'memory', enabled: this.patchEnabled.get('demo-patch') ?? false,
+      const patch = { id: 'demo-patch', name: 'Demo patch', description: 'A safe demo patch.', caution: '', game_code: 'DEMO', group: 'Demo', type: 'memory', enabled: this.patchEnabled.get('demo-patch') ?? false,
         status: 'disabled', error: '', unverified: false, choices: [], selected: '' };
       if (fn === 'set_auto_apply') this.patchAutoApply = !!params[0];
       if (fn === 'import_url') {
         this.patchUrl = String(params[0]);
         if (!this.patchRecentUrls.includes(this.patchUrl)) this.patchRecentUrls.push(this.patchUrl);
       }
+      if (fn === 'remove_recent_url') this.patchRecentUrls = this.patchRecentUrls.filter(url => url !== params[0]);
+      if (fn === 'clear_recent_urls') this.patchRecentUrls = [];
+      if (fn === 'disable_all') { this.patchEnabled.clear(); this.patchAutoApply = false; patch.enabled = false; }
+      if (fn === 'set_group') { patch.enabled = !!params[2]; this.patchEnabled.set('demo-patch', patch.enabled); }
       if (fn === 'set') { const enabled = !!(params[1] as { enabled?: boolean } | undefined)?.enabled; this.patchEnabled.set('demo-patch', enabled); patch.enabled = enabled; }
       patch.status = patch.enabled ? 'enabled' : 'disabled';
-      if (['get', 'save', 'reload', 'set', 'set_auto_apply', 'import_url'].includes(fn)) return [{ game: 'DEMO', auto_apply: this.patchAutoApply, dirty: false, standalone: true,
+      if (['get', 'save', 'reload', 'set', 'set_auto_apply', 'import_url', 'set_group', 'disable_all', 'remove_recent_url', 'clear_recent_urls'].includes(fn)) return [{ game: 'DEMO', auto_apply: this.patchAutoApply, dirty: false, standalone: true,
+        identity: { game_identifier: 'DEMO', pe_identifier: '00000000-00000000', patch_file: 'patches/DEMO.json' }, groups: [{ game_code: 'DEMO', id: 'Demo', name: 'Demo', description: 'Demo patches', caution: '' }],
         can_import: true, import_url: this.patchUrl, recent_urls: [...this.patchRecentUrls], import_errors: '', patches: [patch] }];
     }
     if (module === 'card' && fn === 'manager_get') return [{ revision: this.managerRevision, cards: structuredClone(this.managerCards), active: [...this.managerActive] }];
@@ -115,6 +122,7 @@ export class DemoApi implements Rpc {
       if (reader === 0 || reader === 1) this.managerActive[reader] = id;
       return [{ revision: this.managerRevision, cards: structuredClone(this.managerCards), active: [...this.managerActive] }];
     }
+    if (module === 'keypads' && fn === 'capabilities') return [{ model: 'DEMO', keypad_count: 2, keys: true, insert_card: true }];
     if (module === 'coin') {
       if (fn === 'insert') this.coinQueue += Number(params[0] ?? 1);
       return fn === 'get' ? [this.coinQueue] : [];

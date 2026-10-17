@@ -8,6 +8,8 @@
 
 #include "avs/game.h"
 #include "external/rapidjson/document.h"
+#include "games/iidx/iidx.h"
+#include "games/popn/popn.h"
 #include "misc/eamuse.h"
 
 using namespace std::placeholders;
@@ -36,9 +38,49 @@ namespace api::modules {
     };
 
     Keypads::Keypads() : Module("keypads") {
+        functions["capabilities"] = std::bind(&Keypads::capabilities, this, _1, _2);
+        functions["insert_card"] = std::bind(&Keypads::insert_card, this, _1, _2);
         functions["write"] = std::bind(&Keypads::write, this, _1, _2);
         functions["set"] = std::bind(&Keypads::set, this, _1, _2);
         functions["get"] = std::bind(&Keypads::get, this, _1, _2);
+    }
+
+    void Keypads::capabilities(Request &req, Response &res) {
+        if (!req.params.Empty()) {
+            return error(res, "capabilities takes no parameters.");
+        }
+
+        auto &alloc = res.doc()->GetAllocator();
+        Value capabilities(kObjectType);
+        capabilities.AddMember("model", StringRef(avs::game::MODEL, 3), alloc);
+        capabilities.AddMember("keypad_count", eamuse_get_game_keypads(), alloc);
+        const bool keys = !(avs::game::is_model("LDJ") && games::iidx::TDJ_MODE)
+                && !games::popn::is_pikapika_model();
+        capabilities.AddMember("keys", keys, alloc);
+        capabilities.AddMember("insert_card", true, alloc);
+        res.add_data(capabilities);
+    }
+
+    void Keypads::insert_card(Request &req, Response &res) {
+        if (req.params.Size() != 1) {
+            return error(res, "insert_card expects exactly one parameter.");
+        }
+        if (!req.params[0].IsUint()) {
+            return error_type(res, "keypad", "uint");
+        }
+        const auto keypad = req.params[0].GetUint();
+        if (keypad >= static_cast<unsigned>(eamuse_get_game_keypads())) {
+            return error(res, "keypad is unavailable for this model.");
+        }
+
+        DWORD sleep_time = 70;
+        if (avs::game::is_model("MDX")) {
+            sleep_time = 150;
+        }
+        eamuse_set_keypad_overrides(keypad, 1 << EAM_IO_INSERT);
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleep_time));
+        eamuse_set_keypad_overrides(keypad, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleep_time));
     }
 
     /**

@@ -69,6 +69,47 @@ inline void config_test_log(const Args &...) {
 #define log_warning(...) config_test_log(__VA_ARGS__)
 #define log_fatal(...) config_test_log(__VA_ARGS__)
 
+inline std::string wchar_to_u8(const wchar_t *value) {
+    std::string result;
+    if (value == nullptr) {
+        return result;
+    }
+    for (; *value != L'\0'; value++) {
+        result.push_back(*value >= 0 && *value <= 0x7f ? static_cast<char>(*value) : '?');
+    }
+    return result;
+}
+
+namespace hooks::audio {
+    struct AsioDriverScanEntry {
+        std::string name;
+        bool found_32bit = false;
+        bool found_64bit = false;
+    };
+
+    inline std::vector<AsioDriverScanEntry> scan_asio_drivers() {
+        return {{"Test ASIO", true, true}, {"Legacy ASIO", false, true}};
+    }
+}
+
+namespace sysutils {
+    struct MonitorEntry {
+        std::string display_name;
+        std::wstring friendly_name;
+        bool is_primary = false;
+        std::uint32_t adapter_id_LowPart = 0;
+        std::int32_t adapter_id_HighPart = 0;
+        std::uint32_t id = 0;
+    };
+
+    inline const std::vector<MonitorEntry> &enumerate_monitors() {
+        static const std::vector<MonitorEntry> monitors {
+            {"\\\\.\\DISPLAY1", L"Test Monitor", true, 0, 0, 0},
+        };
+        return monitors;
+    }
+}
+
 namespace fileutils {
     inline std::optional<std::filesystem::path> CONFIG_DIRECTORY;
 

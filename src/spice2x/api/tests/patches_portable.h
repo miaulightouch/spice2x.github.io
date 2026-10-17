@@ -1,11 +1,19 @@
 #pragma once
 
+#include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <filesystem>
 #include <mutex>
+#include <map>
 #include <string>
 #include <vector>
+#include <strings.h>
 
+#include "external/rapidjson/document.h"
 #include "patcher/patch_manager.h"
+
+#define _stricmp strcasecmp
 
 template<typename... Args>
 inline void patches_test_log(const Args &...) {
@@ -15,6 +23,16 @@ inline void patches_test_log(const Args &...) {
 #define log_misc(...) patches_test_log(__VA_ARGS__)
 #define log_warning(...) patches_test_log(__VA_ARGS__)
 
+inline std::string strtolower(const std::string &input) {
+    std::string output = input;
+    output.erase(0, output.find_first_not_of("\t\n\v\f\r "));
+    output.erase(output.find_last_not_of("\t\n\v\f\r ") + 1);
+    std::transform(output.begin(), output.end(), output.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return output;
+}
+
 namespace avs::game {
     inline std::string DLL_NAME = "target.dll";
 
@@ -22,6 +40,8 @@ namespace avs::game {
         return "PATCH-TEST";
     }
 }
+
+inline std::filesystem::path MODULE_PATH = "modules";
 
 namespace cfg {
     inline bool CONFIGURATOR_STANDALONE = true;
@@ -54,6 +74,11 @@ namespace patcher {
     inline std::string url_fetch_errors;
     inline size_t url_recent_idx = static_cast<size_t>(-1);
     inline std::vector<std::string> url_recents;
+    inline std::map<std::pair<std::string, std::string>, PatchGroup> patch_groups;
+
+    inline std::string get_game_identifier(const std::filesystem::path &, bool) {
+        return "PE-TEST";
+    }
 
     inline StateLock::StateLock() : lock(patches_test_mutex), outermost(true) {
     }

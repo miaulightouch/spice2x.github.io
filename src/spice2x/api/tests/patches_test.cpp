@@ -68,22 +68,41 @@ int main() {
     patcher::patches_test_events.clear();
     patcher::patch_url.clear();
     patcher::url_recents.clear();
+    patcher::patch_groups.clear();
     patcher::url_fetch_errors.clear();
     avs::game::DLL_NAME = "target.dll";
     cfg::CONFIGURATOR_STANDALONE = true;
 
     auto memory = make_patch("memory-id", "Memory", patcher::PatchType::Memory);
+    memory.game_code = "TST";
+    memory.group_id = "gameplay";
     memory.patch_number.value = 0x13579bdf;
     auto signature = make_patch("signature-id", "Signature", patcher::PatchType::Signature);
+    signature.game_code = "tst";
+    signature.group_id = "gameplay";
     auto union_patch = make_patch("union-id", "Union", patcher::PatchType::Union);
     union_patch.patches_union.push_back({.name = "one"});
     union_patch.patches_union.push_back({.name = "two"});
     union_patch.selected_union_name = "one";
     auto integer = make_patch("integer-id", "Integer", patcher::PatchType::Integer);
+    integer.game_code = "ALT";
+    integer.group_id = "gameplay";
     integer.patch_number.min = 1;
     integer.patch_number.max = 10;
     integer.patch_number.value = 3;
     patcher::patches = {memory, signature, union_patch, integer};
+    patcher::patch_groups.emplace(std::make_pair(std::string("tst"), std::string("gameplay")), patcher::PatchGroup {
+        .name = "Gameplay",
+        .description = "Gameplay group",
+        .caution = "Use with care",
+        .name_in_lower_case = "gameplay",
+    });
+    patcher::patch_groups.emplace(std::make_pair(std::string("alt"), std::string("gameplay")), patcher::PatchGroup {
+        .name = "Gameplay",
+        .description = "Alternate gameplay group",
+        .caution = "Use with care",
+        .name_in_lower_case = "gameplay-alt",
+    });
 
     api::modules::Patches module;
     for (const auto *function : {"get", "set", "set_auto_apply", "save", "reload", "import_url"}) {
@@ -92,12 +111,27 @@ int main() {
     }
     assert(module.requires_password("get"));
     assert(module.requires_password("set"));
+    assert(module.requires_password("set_group"));
+    assert(module.requires_password("disable_all"));
     assert(module.requires_password("import_url"));
+    assert(module.requires_password("remove_recent_url"));
+    assert(module.requires_password("clear_recent_urls"));
 
     auto result = call(module, "get");
     assert(result["errors"].Empty());
     assert(result["data"].Size() == 1);
     assert(std::string(result["data"][0]["game"].GetString()) == "PATCH-TEST");
+    assert(std::string(result["data"][0]["identity"]["game_identifier"].GetString()) == "PATCH-TEST");
+    assert(std::string(result["data"][0]["identity"]["pe_identifier"].GetString()) == "PE-TEST");
+    assert(result["data"][0]["identity"]["patch_file"].IsString());
+    assert(result["data"][0]["groups"].Size() == 2);
+    assert(std::string(result["data"][0]["groups"][0]["game_code"].GetString()) == "tst");
+    assert(std::string(result["data"][0]["groups"][0]["id"].GetString()) == "gameplay");
+    assert(std::string(result["data"][0]["groups"][0]["name"].GetString()) == "Gameplay");
+    assert(std::string(result["data"][0]["groups"][1]["game_code"].GetString()) == "alt");
+    assert(std::string(result["data"][0]["groups"][1]["id"].GetString()) == "gameplay");
+    assert(std::string(result["data"][0]["patches"][3]["game_code"].GetString()) == "alt");
+    assert(std::string(result["data"][0]["patches"][3]["group"].GetString()) == "gameplay");
     assert(result["data"][0]["patches"].Size() == 4);
     assert(std::string(result["data"][0]["patches"][1]["type"].GetString()) == "memory");
     assert(result["data"][0]["patches"][2]["choices"].Size() == 2);
@@ -236,6 +270,71 @@ int main() {
     assert(result["errors"].Size() == 1);
     assert(patcher::config_dirty);
     patcher::patches_test_save_failure = false;
+
+    result = call(module, "set", R"(["integer-id",{"enabled":false}])");
+    assert(result["errors"].Empty());
+    assert(!result["data"][0]["patches"][3]["enabled"].GetBool());
+    result = call(module, "set_group", R"(["TST","gameplay",false])");
+    assert(result["errors"].Empty());
+    assert(!result["data"][0]["patches"][0]["enabled"].GetBool());
+    assert(!result["data"][0]["patches"][1]["enabled"].GetBool());
+    assert(!result["data"][0]["patches"][3]["enabled"].GetBool());
+    result = call(module, "set_group", R"(["TST","gameplay",true])");
+    assert(result["errors"].Empty());
+    assert(result["data"][0]["patches"][0]["enabled"].GetBool());
+    assert(result["data"][0]["patches"][1]["enabled"].GetBool());
+    assert(!result["data"][0]["patches"][3]["enabled"].GetBool());
+    result = call(module, "set_group", R"(["ALT","gameplay",true])");
+    assert(result["errors"].Empty());
+    assert(result["data"][0]["patches"][3]["enabled"].GetBool());
+
+    patcher::patches_test_apply_failure = true;
+    result = call(module, "set_group", R"(["TST","gameplay",false])");
+    assert(result["errors"].Size() == 1);
+    assert(result["data"].Size() == 1);
+    assert(result["data"][0]["patches"][0].HasMember("error"));
+    patcher::patches_test_apply_failure = false;
+
+    result = call(module, "disable_all");
+    assert(result["errors"].Empty());
+    assert(!result["data"][0]["auto_apply"].GetBool());
+    for (const auto &patch : result["data"][0]["patches"].GetArray()) {
+        assert(!patch["enabled"].GetBool());
+    }
+
+    patcher::url_recents = {"https://one.example/patches", "https://two.example/patches"};
+    patcher::url_recent_idx = patcher::url_recents.size() - 1;
+    patcher::patches_test_save_count = 0;
+    patcher::patches_test_save_failure = true;
+    result = call(module, "remove_recent_url", R"(["https://one.example/patches"])");
+    assert(result["errors"].Size() == 1);
+    assert(patcher::url_recents == std::vector<std::string>({
+        "https://one.example/patches", "https://two.example/patches"}));
+    assert(patcher::url_recent_idx == 1);
+    assert(patcher::patches_test_save_count == 1);
+    patcher::patches_test_save_failure = false;
+    result = call(module, "remove_recent_url", R"(["https://one.example/patches"])");
+    assert(result["errors"].Empty());
+    assert(patcher::url_recent_idx == static_cast<size_t>(-1));
+    assert(patcher::patches_test_save_count == 2);
+    assert(result["data"][0]["recent_urls"].Size() == 1);
+    assert(std::string(result["data"][0]["recent_urls"][0].GetString()) == "https://two.example/patches");
+    patcher::url_recents = {"https://one.example/patches", "https://two.example/patches"};
+    patcher::url_recent_idx = patcher::url_recents.size() - 1;
+    patcher::patches_test_save_count = 0;
+    patcher::patches_test_save_failure = true;
+    result = call(module, "clear_recent_urls");
+    assert(result["errors"].Size() == 1);
+    assert(patcher::url_recents == std::vector<std::string>({
+        "https://one.example/patches", "https://two.example/patches"}));
+    assert(patcher::url_recent_idx == 1);
+    assert(patcher::patches_test_save_count == 1);
+    patcher::patches_test_save_failure = false;
+    result = call(module, "clear_recent_urls");
+    assert(result["errors"].Empty());
+    assert(patcher::url_recent_idx == static_cast<size_t>(-1));
+    assert(patcher::patches_test_save_count == 2);
+    assert(result["data"][0]["recent_urls"].Empty());
 
     result = call(module, "reload");
     assert(result["errors"].Empty());
