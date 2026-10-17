@@ -9,7 +9,7 @@ namespace api {
 
     namespace {
 
-#ifdef SPICE_JPEG
+#if defined(SPICE_JPEG) || (defined(SPICE_XP) && SPICE_XP)
         constexpr const char *MJPEG_BOUNDARY = "spice2xframe";
 
         // multipart/x-mixed-replace: every frame is a standalone JPEG, no inter-frame state
@@ -53,7 +53,7 @@ namespace api {
     std::unique_ptr<StreamWriter> make_stream_writer(
             const std::string &path, [[maybe_unused]] int quality, [[maybe_unused]] int fps) {
 
-#ifdef SPICE_JPEG
+#if defined(SPICE_JPEG) || (defined(SPICE_XP) && SPICE_XP)
         if (path == "/stream.mjpg") {
             return std::make_unique<MjpegWriter>(quality);
         }
@@ -71,7 +71,7 @@ namespace api {
     std::vector<std::pair<std::string, std::string>> stream_formats() {
         std::vector<std::pair<std::string, std::string>> formats;
 
-#ifdef SPICE_JPEG
+#if defined(SPICE_JPEG) || (defined(SPICE_XP) && SPICE_XP)
         formats.emplace_back("mjpeg", "/stream.mjpg");
 #endif
 

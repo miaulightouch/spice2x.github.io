@@ -317,12 +317,10 @@ which also means that your hex edits are applicable directly.
   - returns information about the serial LCD controller some games use
 
 #### Resize
-Image transforms are implemented on the Direct3D 9 path and on jubeat's legacy
-OpenGL path in `SPICE_XP` builds. Non-XP builds neither compile nor initialize
-this experimental WGL backend. OpenGL uses only 1.1 functions and a separate
-context; it supports scaling, offsets, filtering and left/right duplication. The texture must fit
-the driver's maximum power-of-two texture size. Failures are logged under
-`graphics::opengl`. OpenGL screenshot/capture and overlay support are unchanged.
+Image transforms support Direct3D 9 and jubeat's legacy OpenGL 1.1 path.
+OpenGL uses a separate context for scaling, offsets, filtering and left/right duplication;
+the source must fit the drawable and the driver's power-of-two texture limit.
+OpenGL screenshots and capture use the final image; overlays are unsupported.
 Other rendering backends can store these settings without applying a transform.
 A successful save confirms an accepted file write, not rendering or retention through an Embedded write filter.
 
@@ -432,10 +430,7 @@ The stream is view only. Touch and other input still go through the JSON API,
 so a companion app needs both. There is no authentication on the stream port -
 anyone who can reach it can watch the screen.
 
-WinXP builds have no video stream. Neither encoder is compiled in, so nothing
-listens on the stream port even with `-apistream`, `capture.get_streams()`
-returns no data, and the JSON API's JPEG screen capture is unavailable for the
-same reason.
+WinXP builds support JPEG capture and MJPEG streaming; H.264 requires a non-XP build with x264.
 
 ## Native wrapper libraries
 Spicetools provides wrapper libraries in: Arduino, C++, Dart, and Python.

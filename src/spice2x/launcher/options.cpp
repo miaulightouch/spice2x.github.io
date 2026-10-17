@@ -2626,6 +2626,7 @@ static const std::vector<OptionDefinition> OPTION_DEFINITIONS = std::invoke([]()
         .title = "Window Forced Render Scaling",
         .name = "windowscale",
         .desc = "For windowed mode: forcibly set DX9 back buffer dimensions to match window size. "
+            "On jubeat OpenGL, scale the final image to the window. "
             "Reduces pixelated scaling artifacts. Works great for some games, but can COMPLETELY BREAK other games - YMMV!",
         .type = OptionType::Bool,
         .category = "Windowed Settings",

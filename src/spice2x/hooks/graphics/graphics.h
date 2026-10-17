@@ -149,6 +149,7 @@ inline constexpr size_t GRAPHICS_CAPTURE_SCREEN_NO = 4;
 void graphics_capture_trigger(int screen);
 bool graphics_capture_consume(int *screen);
 void graphics_capture_enqueue(int screen, uint8_t *data, size_t width, size_t height);
+void graphics_capture_enqueue(int screen, std::shared_ptr<uint8_t[]> data, size_t width, size_t height);
 void graphics_capture_skip(int screen);
 // size of the last frame captured off this screen, before any caller side downscale; false
 // until one has been captured, so it cannot report a size for a screen the game never drew

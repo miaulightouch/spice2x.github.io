@@ -258,7 +258,7 @@ add_subdirectory(external/wslay EXCLUDE_FROM_ALL)
 add_subdirectory(external/cpu_features EXCLUDE_FROM_ALL)
 
 # libjpeg-turbo, prebuilt into the deps image. The WinXP toolchains have their own
-# sysroot and cannot see it, so those targets build without JPEG support.
+# sysroot and cannot see it, so those targets use the bundled stb JPEG encoder.
 add_library(spice_jpeg INTERFACE)
 if(NOT SPICE_XP)
     # search static archives only: the mingw package also ships an import library,
@@ -776,13 +776,9 @@ set(SOURCE_FILES ${SOURCE_FILES}
         util/socd_cleaner.cpp
 )
 
-# Legacy WGL hooks are currently validated only for the XP build path.
-# Non-XP targets must not compile or initialize this experimental backend.
-if(SPICE_XP)
-    list(APPEND SOURCE_FILES
-            hooks/graphics/backends/opengl/opengl_backend.cpp
-            hooks/graphics/backends/opengl/opengl_resize.cpp)
-endif()
+list(APPEND SOURCE_FILES
+        hooks/graphics/backends/opengl/opengl_backend.cpp
+        hooks/graphics/backends/opengl/opengl_resize.cpp)
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} PREFIX "Source Files" FILES ${SOURCE_FILES})
 

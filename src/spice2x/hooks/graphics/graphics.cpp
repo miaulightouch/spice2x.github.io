@@ -23,9 +23,7 @@
 #include "games/popn/popn.h"
 #include "hooks/graphics/jpeg_encoder.h"
 #include "hooks/graphics/backends/d3d9/d3d9_backend.h"
-#if SPICE_XP
 #include "hooks/graphics/backends/opengl/opengl_backend.h"
-#endif
 #include "hooks/graphics/backends/d3d11/d3d11_backend.h"
 #include "launcher/shutdown.h"
 #include "misc/hotkeys.h"
@@ -67,7 +65,7 @@ static HICON WINDOW_ICON = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(MA
 static WNDPROC WNDPROC_ORIG = nullptr;
 static WNDPROC WSUB_WNDPROC_ORIG = nullptr;
 static std::vector<WNDPROC> WNDPROC_CUSTOM {};
-static bool GRAPHICS_SCREENSHOT_TRIGGER = false;
+static std::atomic<bool> GRAPHICS_SCREENSHOT_TRIGGER {false};
 static std::set<int> GRAPHICS_SCREENS { 0 };
 static std::mutex GRAPHICS_SCREENS_M {};
 static std::vector<int> GRAPHICS_CAPTURE_SCREENS;
@@ -409,6 +407,12 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         return false;
     }
 
+    if (uMsg == WM_DESTROY) {
+        auto wndproc = WNDPROC_ORIG;
+        reset_window_hook(hWnd);
+        return CallWindowProcA(wndproc, hWnd, uMsg, wParam, lParam);
+    }
+
     // overlay specific
     if (overlay::OVERLAY) {
         switch (uMsg) {
@@ -420,11 +424,6 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
                     return true;
                 }
                 break;
-            }
-            case WM_DESTROY: {
-                auto wndproc = WNDPROC_ORIG;
-                reset_window_hook(hWnd);
-                return CallWindowProcA(wndproc, hWnd, uMsg, wParam, lParam);
             }
             case WM_SETCURSOR: {
 
@@ -727,6 +726,7 @@ static HWND WINAPI CreateWindowExA_hook(DWORD dwExStyle, LPCSTR lpClassName, LPC
     HWND result = CreateWindowExA_orig(dwExStyle, lpClassName, lpWindowName, dwStyle, x, y, nWidth, nHeight,
             hWndParent, hMenu, hInstance, lpParam);
     GRAPHICS_WINDOWS.push_back(result);
+    graphics_opengl_window_created(result, window_name);
 
     // remember these windows now because full capture happens later during D3D
     // initialization; placement calls before then can undo creation-time overrides
@@ -1333,9 +1333,7 @@ void graphics_init() {
 
     // init backends
     graphics_d3d9_init();
-#if SPICE_XP
     graphics_opengl_init();
-#endif
     graphics_d3d11_init();
 
     // general hooks
@@ -1497,9 +1495,7 @@ void graphics_screenshot_trigger() {
 }
 
 bool graphics_screenshot_consume() {
-    auto flag = GRAPHICS_SCREENSHOT_TRIGGER;
-    GRAPHICS_SCREENSHOT_TRIGGER = false;
-    return flag;
+    return GRAPHICS_SCREENSHOT_TRIGGER.exchange(false);
 }
 
 void graphics_capture_trigger(int screen) {
@@ -1521,10 +1517,14 @@ bool graphics_capture_consume(int *screen) {
 }
 
 void graphics_capture_enqueue(int screen, uint8_t *data, size_t width, size_t height) {
+    graphics_capture_enqueue(screen, std::shared_ptr<uint8_t[]>(data), width, height);
+}
+
+void graphics_capture_enqueue(int screen, std::shared_ptr<uint8_t[]> data, size_t width, size_t height) {
     GRAPHICS_CAPTURE_BUFFER_M[screen].lock();
     GRAPHICS_CAPTURE_SKIP_SIGNAL[screen] = false;
     auto &capture = GRAPHICS_CAPTURE_BUFFER[screen];
-    capture.data.reset(data);
+    capture.data = std::move(data);
     capture.width = width;
     capture.height = height;
     capture.timestamp = get_performance_milliseconds();

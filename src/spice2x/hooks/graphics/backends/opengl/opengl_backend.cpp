@@ -1,12 +1,25 @@
 #include "opengl_backend.h"
+
+#ifdef SPICE_OPENGL_TEST
+#include "tests/backend_portable.h"
+#else
 #include "opengl_resize.h"
 
+#include <atomic>
 #include <map>
+#include <memory>
 #include <mutex>
 
+#include "external/fpng/fpng.h"
+#include "hooks/graphics/graphics.h"
+#include "misc/clipboard.h"
 #include "misc/eamuse.h"
+#include "overlay/notifications.h"
 #include "util/detour.h"
+#include "util/fileutils.h"
 #include "util/logging.h"
+#include "util/threadpool.h"
+#endif
 
 namespace {
     graphics::opengl::GlApi gl;
@@ -19,9 +32,12 @@ namespace {
     decltype(wglSwapLayerBuffers) *swap_layers = nullptr;
     std::mutex contexts_mutex;
     thread_local bool in_swap = false;
+    std::atomic<bool> screenshot_busy {false};
 
     struct Context {
         HGLRC resize_context = nullptr;
+        HWND owner_window = nullptr;
+        HWND window = nullptr;
         graphics::opengl::ImageResize image;
         GLenum buffer = 0;
         bool warned = false;
@@ -30,39 +46,145 @@ namespace {
     // Game contexts may move between equivalent DC handles; all resources are context-owned.
     std::map<HGLRC, Context> contexts;
 
-    void transform(HDC dc) {
+    void save_screenshot(std::shared_ptr<uint8_t[]> pixels, int width, int height) {
+        // One pending PNG bounds memory and serializes filename allocation and clipboard writes.
+        if (screenshot_busy.exchange(true)) {
+            graphics_screenshot_trigger();
+            return;
+        }
+        try {
+            static auto *pool = new ThreadPool(1);
+            pool->add([pixels = std::move(pixels), width, height] {
+                try {
+                    static std::once_flag fpng_ready;
+                    std::call_once(fpng_ready, [] { fpng::fpng_init(); });
+                    const auto path = graphics_screenshot_genpath();
+                    if (!path.empty() && fpng::fpng_encode_image_to_file(
+                            path.c_str(), pixels.get(), width, height, 3)) {
+                        log_info("graphics::opengl", "screenshot saved: {}", path);
+                        clipboard::copy_image(path);
+                        overlay::notifications::add(overlay::notifications::Severity::Success,
+                                fmt::format("Screenshot saved: {}", fileutils::basename(path)));
+                    } else {
+                        log_warning("graphics::opengl", "failed to save screenshot");
+                        overlay::notifications::add(overlay::notifications::Severity::Error,
+                                "Screenshot failed to save");
+                    }
+                } catch (const std::exception &error) {
+                    log_warning("graphics::opengl", "screenshot save failed: {}", error.what());
+                } catch (...) {
+                    log_warning("graphics::opengl", "screenshot save failed");
+                }
+                screenshot_busy = false;
+            });
+        } catch (...) {
+            screenshot_busy = false;
+            throw;
+        }
+    }
+
+    void prepare_window(HWND window) {
+        graphics_hook_window(window, nullptr);
+        if (GRAPHICS_WINDOWED) return;
+
+        // Legacy OpenGL has no D3D presentation parameters; use a borderless monitor-sized window.
+        MONITORINFO monitor {};
+        monitor.cbSize = sizeof(monitor);
+        if (!GetMonitorInfo(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor)) return;
+        const auto style = GetWindowLong(window, GWL_STYLE) & ~WS_OVERLAPPEDWINDOW;
+        const auto style_ex = GetWindowLong(window, GWL_EXSTYLE) & ~(WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE);
+        SetWindowLong(window, GWL_STYLE, style);
+        SetWindowLong(window, GWL_EXSTYLE, style_ex);
+        const auto &rect = monitor.rcMonitor;
+        if (!SetWindowPos(window, nullptr, rect.left, rect.top,
+                rect.right - rect.left, rect.bottom - rect.top,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS)) {
+            log_warning("graphics::opengl", "unable to size fullscreen window, error={}", GetLastError());
+        }
+    }
+
+    void present(HDC dc) {
         const auto game_context = get_context();
         const auto game_dc = get_dc();
-        if (!game_context || !game_dc || game_dc != dc || !cfg::SCREENRESIZE) return;
+        const HWND window = WindowFromDC(dc);
+        const HWND current_window = game_dc ? WindowFromDC(game_dc) : nullptr;
+        static std::once_flag swapped;
+        std::call_once(swapped, [&] {
+            log_info("graphics::opengl", "swap received: context={}, current dc={} (window={}), dc={} (window={})",
+                    fmt::ptr(game_context), fmt::ptr(game_dc), fmt::ptr(current_window),
+                    fmt::ptr(dc), fmt::ptr(window));
+        });
+        if (!game_context || !game_dc || !cfg::SCREENRESIZE || !window) return;
+        std::unique_lock lock(contexts_mutex);
+        auto &state = contexts[game_context];
+        // gftools releases its GetDC handle while the context stays current, then swaps a paint DC.
+        if (state.owner_window) {
+            if (state.owner_window != window) return;
+        } else if (game_dc != dc && current_window != window) {
+            return;
+        }
+        const HDC restore_dc = current_window == window ? game_dc : dc;
         static std::once_flag identified;
         std::call_once(identified, [] {
             log_info("graphics::opengl", "game context active: version={}, renderer={}",
                     reinterpret_cast<const char *>(gl.glGetString(GL_VERSION)),
                     reinterpret_cast<const char *>(gl.glGetString(GL_RENDERER)));
         });
+        if (state.window != window) {
+            state.window = window;
+            lock.unlock();
+            prepare_window(window);
+            // Resizing may replace the drawable. Let the game render its next frame first.
+            return;
+        }
+
+        graphics_poll_screenshot_hotkey();
+        bool screenshot = !screenshot_busy && graphics_screenshot_consume();
+        int screen = 0;
+        bool capture = graphics_capture_consume(&screen);
+        if (capture && screen != 0) {
+            graphics_capture_skip(screen);
+            capture = false;
+        }
+        RECT rect {};
+        if (!GetClientRect(window, &rect) || IsIconic(window) || rect.right <= 0 || rect.bottom <= 0) {
+            if (capture) graphics_capture_skip(screen);
+            if (screenshot) graphics_screenshot_trigger();
+            return;
+        }
+        const int width = rect.right;
+        const int height = rect.bottom;
         cfg::fullscreen_setting scene;
         bool linear_filter;
         {
-            std::lock_guard lock(cfg::SCREENRESIZE->image_mutex);
-            if (!cfg::SCREENRESIZE->enable_screen_resize) return;
-            scene = cfg::SCREENRESIZE->scene_settings[cfg::SCREENRESIZE->screen_resize_current_scene];
+            std::lock_guard image_lock(cfg::SCREENRESIZE->image_mutex);
+            if (cfg::SCREENRESIZE->enable_screen_resize) {
+                scene = cfg::SCREENRESIZE->scene_settings[cfg::SCREENRESIZE->screen_resize_current_scene];
+            }
             linear_filter = cfg::SCREENRESIZE->enable_linear_filter;
         }
+        const bool fit = !GRAPHICS_WINDOWED || GRAPHICS_WINDOW_BACKBUFFER_SCALE;
+        graphics::opengl::ImageRect source {0, 0, width, height};
+        if (fit) {
+            // The last viewport can be only the test menu's upper display, not the full canvas.
+            if (cfg::SCREENRESIZE->init_client_width && cfg::SCREENRESIZE->init_client_height) {
+                source = {0, 0, static_cast<int>(cfg::SCREENRESIZE->init_client_width),
+                    static_cast<int>(cfg::SCREENRESIZE->init_client_height)};
+            } else {
+                GLint viewport[4] {};
+                gl.glGetIntegerv(GL_VIEWPORT, viewport);
+                source = {viewport[0], viewport[1], viewport[2], viewport[3]};
+            }
+        }
+        const bool resize = graphics::opengl::requires_resize(scene) ||
+            (fit && (source.x != 0 || source.y != 0 || source.width != width || source.height != height));
         // No extra copy, context switch or GPU synchronization for an identity scene.
-        if (!graphics::opengl::requires_resize(scene)) return;
-        RECT rect {};
-        const HWND window = WindowFromDC(dc);
-        if (!window || !GetClientRect(window, &rect)) return;
-        const auto width = rect.right - rect.left;
-        const auto height = rect.bottom - rect.top;
-        if (width <= 0 || height <= 0) return;
-
-        std::lock_guard lock(contexts_mutex);
-        auto &state = contexts[game_context];
+        if (!resize && !screenshot && !capture) return;
         if (!state.resize_context) state.resize_context = create_context(dc);
         if (!state.resize_context) {
             if (!state.warned) log_warning("graphics::opengl", "unable to create resize context, error={}", GetLastError());
             state.warned = true;
+            if (capture) graphics_capture_skip(screen);
             return;
         }
         // Complete game rendering before accessing its default framebuffer from our context.
@@ -71,31 +193,55 @@ namespace {
         gl.glFinish();
         const bool switched = make_current(dc, state.resize_context);
         bool drawn = false;
+        std::unique_ptr<uint8_t[]> pixels;
         if (switched) {
             if (!state.buffer) {
                 GLint double_buffer = GL_FALSE;
                 gl.glGetIntegerv(GL_DOUBLEBUFFER, &double_buffer);
                 state.buffer = double_buffer ? GL_BACK : GL_FRONT;
             }
-            drawn = state.image.draw(gl, width, height, scene, linear_filter, state.buffer);
+            if (resize) drawn = state.image.draw(gl, source, width, height, scene, linear_filter, state.buffer);
+            if (screenshot || capture) pixels = graphics::opengl::read_pixels(gl, width, height, state.buffer);
+            // A successful synchronous readback already completed the final draw.
+            if (drawn && !pixels) gl.glFinish();
         }
         // wglMakeCurrent failure unbinds the old context, so restore it on BOTH paths.
-        const bool restored = make_current(game_dc, game_context);
-        if ((!drawn || !restored) && !state.warned) {
-            log_warning("graphics::opengl", "image resize failed (switched={}, drawn={}, restored={}, error={})",
+        const bool restored = make_current(restore_dc, game_context);
+        if ((!switched || (resize && !drawn) || ((screenshot || capture) && !pixels) || !restored) && !state.warned) {
+            log_warning("graphics::opengl", "frame processing failed (switched={}, drawn={}, restored={}, error={})",
                     switched, drawn, restored, GetLastError());
             state.warned = true;
         }
         if (drawn && restored && !state.logged) {
-            log_info("graphics::opengl", "image resize active: {}x{}", width, height);
+            log_info("graphics::opengl", "image resize active: {}x{} -> {}x{}",
+                    source.width, source.height, width, height);
             state.logged = true;
+        }
+        lock.unlock();
+        if (pixels && restored) {
+            auto shared = std::shared_ptr<uint8_t[]>(std::move(pixels));
+            if (capture) graphics_capture_enqueue(screen, shared, width, height);
+            if (screenshot) save_screenshot(std::move(shared), width, height);
+        } else if (capture) {
+            graphics_capture_skip(screen);
+        }
+    }
+
+    void process_frame(HDC dc) {
+        try {
+            present(dc);
+        } catch (const std::exception &error) {
+            // Allocation/worker failures must never unwind through the game's swap call.
+            log_warning("graphics::opengl", "frame processing failed: {}", error.what());
+        } catch (...) {
+            log_warning("graphics::opengl", "frame processing failed");
         }
     }
 
     BOOL WINAPI swap_buffers_hook(HDC dc) {
         if (in_swap) return swap_buffers(dc);
         in_swap = true;
-        transform(dc);
+        process_frame(dc);
         const auto result = swap_buffers(dc);
         in_swap = false;
         return result;
@@ -104,9 +250,23 @@ namespace {
     BOOL WINAPI swap_layers_hook(HDC dc, UINT planes) {
         if (in_swap) return swap_layers(dc, planes);
         in_swap = true;
-        if (planes & WGL_SWAP_MAIN_PLANE) transform(dc);
+        if (planes & WGL_SWAP_MAIN_PLANE) process_frame(dc);
         const auto result = swap_layers(dc, planes);
         in_swap = false;
+        return result;
+    }
+
+    BOOL WINAPI make_current_hook(HDC dc, HGLRC context) {
+        const auto result = make_current(dc, context);
+        if (result && context) {
+            const auto window = dc ? WindowFromDC(dc) : nullptr;
+            try {
+                std::lock_guard lock(contexts_mutex);
+                contexts[context].owner_window = window;
+            } catch (...) {
+                log_warning("graphics::opengl", "unable to record context window");
+            }
+        }
         return result;
     }
 
@@ -122,6 +282,27 @@ namespace {
             }
         }
         return result;
+    }
+}
+
+void graphics_opengl_window_created(HWND window, std::string_view title) {
+    // Preserve the game's canvas before launcher settings resize the main window.
+    if (window && eamuse_get_game() == "Jubeat" &&
+            GetModuleHandleW(L"gftools.dll") && title.ends_with(" - jubeat")) {
+        if (!GRAPHICS_WINDOWED) {
+            RECT rect {};
+            if (cfg::SCREENRESIZE && GetClientRect(window, &rect) && rect.right > 0 && rect.bottom > 0) {
+                cfg::SCREENRESIZE->init_client_width = rect.right;
+                cfg::SCREENRESIZE->init_client_height = rect.bottom;
+            }
+            return;
+        }
+        graphics_hook_window(window, nullptr);
+        RECT rect {};
+        if (GetClientRect(window, &rect)) {
+            log_info("graphics::opengl", "main window client after initialization: {}x{}",
+                    rect.right - rect.left, rect.bottom - rect.top);
+        }
     }
 }
 
@@ -148,6 +329,9 @@ void graphics_opengl_init() {
     }
     // Some engines use wglSwapLayerBuffers rather than GDI SwapBuffers.
     if (swap_layers) detour::trampoline_try("opengl32.dll", "wglSwapLayerBuffers", swap_layers_hook, &swap_layers);
+    if (!detour::trampoline_try("opengl32.dll", "wglMakeCurrent", make_current_hook, &make_current)) {
+        log_warning("graphics::opengl", "unable to track context windows; released DC scaling may be unavailable");
+    }
     detour::trampoline_try("opengl32.dll", "wglDeleteContext", delete_context_hook, &delete_context);
     log_info("graphics::opengl", "legacy image resize hooks initialized");
 }
