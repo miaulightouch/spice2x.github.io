@@ -1,6 +1,7 @@
 import { errorText, renderText, LocalizedError } from '../i18n';
 import type { TextValue } from '../i18n';
 import { Rc4 } from './rc4';
+import { isEmbeddedBuild, isEmbeddedEndpoint } from '../mode';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 export interface Rpc {
@@ -53,6 +54,7 @@ export class SpiceClient implements Rpc {
 
   async connect(endpoint: string, password: string): Promise<void> {
     const url = normalizeEndpoint(endpoint);
+    if (isEmbeddedBuild && !isEmbeddedEndpoint(url)) throw new LocalizedError('error.endpointOrigin');
     this.disconnect();
     const generation = this.generation;
     this.cipher = password ? new Rc4(this.encoder.encode(password)) : undefined;

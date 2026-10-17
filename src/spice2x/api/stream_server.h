@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -10,6 +11,21 @@
 #include <winsock2.h>
 
 namespace api {
+
+    struct HttpRequest {
+        std::string method;
+        std::string path;
+        std::string version;
+        std::map<std::string, std::string> query;
+        std::map<std::string, std::string> headers;
+    };
+
+    // Reads exactly through the HTTP header terminator, leaving any following bytes untouched.
+    bool read_http_request(SOCKET socket, size_t size_limit, HttpRequest &request);
+    bool websocket_upgrade_requested(const HttpRequest &request);
+    void send_http_error(SOCKET socket, const char *status, const char *allow = nullptr);
+    void handle_http_request(SOCKET socket, const HttpRequest &request,
+            std::atomic_bool &running, const std::string &address);
 
     // 0 while no stream server is listening, so the API can tell clients not to look for one
     unsigned short stream_server_port();
@@ -31,9 +47,6 @@ namespace api {
         static constexpr int request_size_limit = 8 * 1024;
         static constexpr int request_timeout_ms = 5000;
         static constexpr int send_timeout_ms = 5000;
-        // small enough that a low bitrate stream cannot hide a backlog of stale frames in it
-        static constexpr int send_buffer_bytes = 16 * 1024;
-        static constexpr int fps_limit = 60;
 
         struct Client {
             std::thread thread;

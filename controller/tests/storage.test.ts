@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { EMBEDDED_PROFILE_ID, isEmbeddedProfile } from '../src/mode';
 import { loadCards, loadProfiles, saveCards, saveProfiles, type Profile, type SavedCard } from '../src/storage';
 
 function memoryStorage(): Pick<Storage, 'getItem' | 'setItem'> {
@@ -81,4 +82,19 @@ test('storage loaders retain their existing format validation', () => {
   }]);
   cards.setItem('arcade-room.cards.v1', '{broken');
   assert.deepEqual(withLocalStorage(cards, loadCards), []);
+});
+
+test('embedded uses shared remembered secrets only for its same-origin profile', () => {
+  const storage = memoryStorage();
+  saveProfiles([
+    { id: EMBEDDED_PROFILE_ID, name: 'Cabinet', endpoint: 'ws://cabinet.example:1338/', password: 'embedded-secret', rememberPassword: true },
+    { id: 'external', name: 'Other', endpoint: 'ws://other.example:1338/', password: 'external-secret', rememberPassword: true },
+    { id: 'temporary', name: 'Temporary', endpoint: 'ws://cabinet.example:1338/', password: 'discard-me', rememberPassword: false },
+  ], storage);
+  const restored = loadProfiles(storage);
+  const location = { protocol: 'http:', host: 'cabinet.example:1338' } as const;
+  assert.deepEqual(restored.filter(profile => isEmbeddedProfile(profile, location)).map(profile => [profile.id, profile.password]), [[EMBEDDED_PROFILE_ID, 'embedded-secret']]);
+  assert.equal(restored.some(profile => isEmbeddedProfile(profile, location) && profile.endpoint.includes('other.example')), false);
+  saveProfiles([{ id: EMBEDDED_PROFILE_ID, name: 'Cabinet', endpoint: 'ws://cabinet.example:1338/', password: 'discard-me', rememberPassword: false }], storage);
+  assert.equal(loadProfiles(storage).find(profile => isEmbeddedProfile(profile, location))?.password, '');
 });

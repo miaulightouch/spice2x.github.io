@@ -1,6 +1,7 @@
 import { LocalizedError } from '../i18n';
 import type { Rpc } from './client';
 import { isRecord, normalizeEndpoint } from './client';
+import { embeddedHttpOrigin, isEmbeddedBuild } from '../mode';
 
 export interface CaptureFrame {
   timestamp: number;
@@ -38,8 +39,16 @@ export function mjpegUrl(endpoint: string, streams: CaptureStreams, screen: numb
       !Number.isInteger(quality) || quality < 1 || quality > 100 || !Number.isInteger(fps) || fps < 1 || fps > 60) {
     throw new LocalizedError('error.noCapture');
   }
-  const url = new URL(normalizeEndpoint(endpoint));
-  url.protocol = 'http:'; url.port = String(streams.port); url.pathname = '/stream.mjpg'; url.search = ''; url.hash = '';
+  let url: URL;
+  if (isEmbeddedBuild) {
+    const origin = embeddedHttpOrigin();
+    if (!origin) throw new LocalizedError('error.noCapture');
+    url = new URL(`${origin}/stream.mjpg`);
+  } else {
+    url = new URL(normalizeEndpoint(endpoint));
+    url.protocol = 'http:'; url.port = String(streams.port); url.pathname = '/stream.mjpg';
+  }
+  url.search = ''; url.hash = '';
   url.searchParams.set('screen', String(screen)); url.searchParams.set('q', String(quality)); url.searchParams.set('fps', String(fps));
   return url.href;
 }

@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { WebSocketServer } from 'ws';
 import { ApiError, SpiceClient, normalizeEndpoint } from '../src/api/client';
 import { Rc4 } from '../src/api/rc4';
+import { embeddedHttpOrigin, embeddedWebSocketEndpoint, isEmbeddedEndpoint } from '../src/mode';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -117,6 +118,20 @@ test('wrong initial password cannot produce a connected session', async () => {
     await assert.rejects(c.connect(s.endpoint, 'wrong'));
     assert.equal(c.status, 'error');
   } finally { c.disconnect(); await s.close(); }
+});
+
+test('embedded endpoint helper keeps WebSocket connections on the page origin', () => {
+  const location = { protocol: 'http:', host: 'cabinet.example:1338' } as const;
+  const endpoint = embeddedWebSocketEndpoint(location);
+  assert.equal(endpoint, 'ws://cabinet.example:1338/');
+  assert.equal(embeddedHttpOrigin(location), 'http://cabinet.example:1338');
+  assert.equal(isEmbeddedEndpoint(endpoint!, location), true);
+  assert.equal(isEmbeddedEndpoint('ws://other.example:1338/', location), false);
+  assert.equal(isEmbeddedEndpoint('wss://cabinet.example:1338/', location), false);
+  const secureLocation = { protocol: 'https:', host: 'cabinet.example:443' } as const;
+  assert.equal(embeddedWebSocketEndpoint(secureLocation), 'wss://cabinet.example:443/');
+  assert.equal(embeddedHttpOrigin(secureLocation), 'https://cabinet.example:443');
+  assert.equal(embeddedHttpOrigin({ protocol: 'file:', host: '' }), undefined);
 });
 
 test('URL validation rejects embedded credentials and non-WebSocket schemes', () => {
