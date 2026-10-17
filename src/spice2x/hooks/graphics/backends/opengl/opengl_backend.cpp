@@ -105,6 +105,11 @@ namespace {
     void present(HDC dc) {
         const auto game_context = get_context();
         const auto game_dc = get_dc();
+        static std::once_flag swapped;
+        std::call_once(swapped, [&] {
+            log_info("graphics::opengl", "swap received: current context={}, current dc={}, resize settings={}",
+                    game_context != nullptr, game_dc != nullptr, cfg::SCREENRESIZE != nullptr);
+        });
         if (!game_context || !game_dc || !cfg::SCREENRESIZE) return;
         if (game_dc != dc && WindowFromDC(game_dc) != WindowFromDC(dc)) return;
         static std::once_flag identified;
@@ -249,6 +254,19 @@ namespace {
             }
         }
         return result;
+    }
+}
+
+void graphics_opengl_window_created(HWND window, std::string_view title) {
+    // Apply launcher window settings even while the legacy game is still loading its GL context.
+    if (window && GRAPHICS_WINDOWED && eamuse_get_game() == "Jubeat" &&
+            GetModuleHandleW(L"gftools.dll") && title.ends_with(" - jubeat")) {
+        graphics_hook_window(window, nullptr);
+        RECT rect {};
+        if (GetClientRect(window, &rect)) {
+            log_info("graphics::opengl", "main window client after initialization: {}x{}",
+                    rect.right - rect.left, rect.bottom - rect.top);
+        }
     }
 }
 

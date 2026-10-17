@@ -726,6 +726,7 @@ static HWND WINAPI CreateWindowExA_hook(DWORD dwExStyle, LPCSTR lpClassName, LPC
     HWND result = CreateWindowExA_orig(dwExStyle, lpClassName, lpWindowName, dwStyle, x, y, nWidth, nHeight,
             hWndParent, hMenu, hInstance, lpParam);
     GRAPHICS_WINDOWS.push_back(result);
+    graphics_opengl_window_created(result, window_name);
 
     // remember these windows now because full capture happens later during D3D
     // initialization; placement calls before then can undo creation-time overrides

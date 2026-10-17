@@ -97,6 +97,48 @@ namespace {
         CHECK(opengl_test::state.read_calls == 0);
     }
 
+    void test_window_created_before_first_context() {
+        reset_backend();
+        const auto context = opengl_test::state.current_context;
+        opengl_test::state.current_context = nullptr;
+        const auto window = opengl_test::state.window;
+        graphics_opengl_window_created(window, "L44 - jubeat");
+        CHECK(opengl_test::state.graphics_hook_calls == 1);
+        CHECK(opengl_test::state.last_hook_window == window);
+        CHECK(opengl_test::state.create_context_calls == 0);
+        CHECK(opengl_test::state.draw_calls == 0);
+
+        opengl_test::state.current_context = context;
+        present(opengl_test::state.current_dc);
+        CHECK(opengl_test::state.graphics_hook_calls == 2);
+        present(opengl_test::state.current_dc);
+        CHECK(opengl_test::state.graphics_hook_calls == 2);
+    }
+
+    void test_window_created_ignores_auxiliary_and_other_games() {
+        reset_backend();
+        const auto window = opengl_test::state.window;
+        for (const auto *title : {"GDI+ Window", "JBFSUBWINDOW", "CicMarshalWndEIF", ""}) {
+            graphics_opengl_window_created(window, title);
+        }
+        graphics_opengl_window_created(nullptr, "L44 - jubeat");
+        CHECK(opengl_test::state.graphics_hook_calls == 0);
+
+        opengl_test::state.game = "Beatmania IIDX";
+        graphics_opengl_window_created(window, "L44 - jubeat");
+        CHECK(opengl_test::state.graphics_hook_calls == 0);
+
+        opengl_test::state.game = "Jubeat";
+        opengl_test::state.legacy_game_module = false;
+        graphics_opengl_window_created(window, "L44 - jubeat");
+        CHECK(opengl_test::state.graphics_hook_calls == 0);
+
+        opengl_test::state.legacy_game_module = true;
+        GRAPHICS_WINDOWED = false;
+        graphics_opengl_window_created(window, "L44 - jubeat");
+        CHECK(opengl_test::state.graphics_hook_calls == 0);
+    }
+
     void test_source_destination_fit_draws_once() {
         reset_backend();
         GRAPHICS_WINDOW_BACKBUFFER_SCALE = true;
@@ -422,6 +464,8 @@ namespace {
 
     const Test tests[] = {
         {"identity_has_no_work", test_identity_has_no_work},
+        {"window_created_before_first_context", test_window_created_before_first_context},
+        {"window_created_ignores_auxiliary_and_other_games", test_window_created_ignores_auxiliary_and_other_games},
         {"source_destination_fit_draws_once", test_source_destination_fit_draws_once},
         {"disabled_scene_uses_base_fit_only", test_disabled_scene_uses_base_fit_only},
         {"capture_and_resize_finish_and_read_once", test_capture_and_resize_finish_and_read_once},

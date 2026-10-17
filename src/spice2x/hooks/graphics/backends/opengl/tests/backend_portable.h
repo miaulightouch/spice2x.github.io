@@ -124,6 +124,8 @@ namespace opengl_test {
         bool delete_context_success = true;
         bool monitor_success = true;
         bool set_window_pos_success = true;
+        bool legacy_game_module = true;
+        std::string game = "Jubeat";
 
         RECT client_rect {0, 0, 640, 480};
         GLint viewport[4] {0, 0, 640, 480};
@@ -402,7 +404,8 @@ inline HMODULE LoadLibraryW(const wchar_t *) {
     return reinterpret_cast<HMODULE>(std::uintptr_t {0x66});
 }
 
-inline HMODULE GetModuleHandleW(const wchar_t *) {
+inline HMODULE GetModuleHandleW(const wchar_t *name) {
+    if (std::wstring_view(name) == L"gftools.dll" && !opengl_test::state.legacy_game_module) return nullptr;
     return reinterpret_cast<HMODULE>(std::uintptr_t {0x77});
 }
 
@@ -520,7 +523,7 @@ template<class... Arguments>
 inline void log_warning(const char *, Arguments &&...) {}
 
 inline std::string eamuse_get_game() {
-    return "Jubeat";
+    return opengl_test::state.game;
 }
 
 namespace detour {
