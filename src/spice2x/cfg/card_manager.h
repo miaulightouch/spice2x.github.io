@@ -11,7 +11,7 @@ namespace cfg {
     struct CardEntry {
         std::string name = "unnamed";
         std::string id = "E0040100FFFFFFFF";
-        std::string search_string;
+        std::string search_string = "";
         bool read_only = false;
         float color[3] {};
     };
