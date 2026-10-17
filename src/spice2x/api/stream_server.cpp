@@ -206,8 +206,8 @@ namespace api {
     StreamServer::StreamServer(unsigned short port)
         : port(port)
     {
-        // WinXP builds compile in neither encoder, so there would be nothing to serve and
-        // every request would 404; taking the port instead only invites confused clients
+        // Builds without a video encoder have nothing to serve and every request would 404;
+        // taking the port instead only invites confused clients
         if (stream_formats().empty()) {
             log_warning("api::stream",
                     "this build has no video encoders, the video stream is unavailable");

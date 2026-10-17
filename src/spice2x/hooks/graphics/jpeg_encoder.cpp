@@ -141,12 +141,95 @@ bool encode(
 }
 }
 
-#else // SPICE_JPEG
+#elif defined(SPICE_XP) && SPICE_XP
+
+#include <cstddef>
+#include <limits>
+
+#include "external/stb_image_write.h"
 
 namespace jpeg_encoder {
 
-// builds without libjpeg-turbo (the WinXP toolchains) simply cannot encode;
-// callers already treat a false return as "no frame available"
+namespace {
+
+struct VectorDestination {
+    std::vector<uint8_t> *out = nullptr;
+    bool failed = false;
+};
+
+void write_to_vector(void *context, void *data, int size) noexcept {
+    auto &destination = *static_cast<VectorDestination *>(context);
+    if (destination.failed || size == 0) {
+        return;
+    }
+    if (size < 0 || data == nullptr) {
+        destination.failed = true;
+        return;
+    }
+
+    try {
+        const auto *bytes = static_cast<const uint8_t *>(data);
+        destination.out->insert(
+                destination.out->end(), bytes, bytes + static_cast<size_t>(size));
+    } catch (...) {
+        // stb calls the callback from C; never let allocation exceptions cross that boundary.
+        destination.failed = true;
+    }
+}
+
+bool valid_image_size(int width, int height) {
+    // JPEG SOF dimensions are unsigned 16-bit values. stb accepts larger ints
+    // but writes a truncated, undecodable marker, so reject before touching pixels.
+    if (width <= 0 || height <= 0 || width > 65535 || height > 65535) {
+        return false;
+    }
+
+    // stb's JPEG core computes source offsets in int, so keep the RGB byte count representable.
+    return static_cast<uint64_t>(width) * height * 3 <= std::numeric_limits<int>::max();
+}
+
+}
+
+bool encode(
+        std::vector<uint8_t> &out,
+        const uint8_t *pixels,
+        int width,
+        int height,
+        int quality) {
+
+    const auto original_size = out.size();
+    if (!pixels || !valid_image_size(width, height)) {
+        return false;
+    }
+
+    if (quality < 1) {
+        quality = 1;
+    } else if (quality > 100) {
+        quality = 100;
+    }
+
+    VectorDestination destination { &out };
+    bool encoded = false;
+    try {
+        encoded = stbi_write_jpg_to_func(
+                write_to_vector, &destination, width, height, 3, pixels, quality) != 0;
+    } catch (...) {
+        destination.failed = true;
+    }
+
+    if (!encoded || destination.failed || out.size() == original_size) {
+        out.resize(original_size);
+        return false;
+    }
+    return true;
+}
+}
+
+#else // SPICE_JPEG || SPICE_XP
+
+namespace jpeg_encoder {
+
+// Builds without either encoder report no frame to callers.
 bool encode(std::vector<uint8_t> &out, const uint8_t *, int, int, int) {
     out.clear();
     return false;
