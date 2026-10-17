@@ -116,7 +116,7 @@
   "action.unsaved": "저장하지 않은 보정은 게임 종료 시 사라질 수 있습니다.",
   "action.confirm": "“{machine}”에서 {action}을(를) 실행할까요?\n{detail}",
   "action.demoPrefix": "데모: ",
-  "cards.title": "카드 및 키패드",
+  "cards.title": "카드",
   "cards.reader": "리더",
   "cards.insertTitle": "카드 삽입",
   "cards.number": "카드 번호",

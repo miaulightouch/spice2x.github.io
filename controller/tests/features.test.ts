@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseCardManager, parseGames, parseIoAnalogs, parseIoButtons, parseIoLights, parseOptions, parsePatches, generateCardId } from '../src/api/features';
-import { mergeOptionDraft, optionDraftChanges, setOptionDraftValue } from '../src/api/options';
+import { clearOptionDraft, mergeOptionDraft, optionDraftChanges, setOptionDraftValue } from '../src/api/options';
 import type { OptionDraftState } from '../src/api/options';
 import { cloneCardManagerCards, mergeCardManagerDraft } from '../src/api/cardManagerDraft';
 import { reactive } from 'vue';
@@ -20,6 +20,7 @@ class FeatureRpc implements Rpc {
   readonly requests: Array<{ module: string; fn: string; params: unknown[] }> = [];
   readonly optionDelay = new Map<string, number>();
   readonly failOptions = new Set<string>();
+  readonly savedOptions: unknown[][] = [];
   readonly pulses: unknown[][] = [];
   managerRevision = 1;
   managerSaveRevision?: number;
@@ -46,6 +47,11 @@ class FeatureRpc implements Rpc {
     if (module === 'resize' && fn === 'image_resize_get') return resizeResponse();
     if (module === 'coin' && fn === 'get') return [0];
     if (module === 'config' && fn === 'get_games') return [{ current: 'A', games: ['A', 'B'] }];
+    if (module === 'config' && fn === 'set_options') {
+      this.savedOptions.push(params);
+      const game = String(params[0]);
+      return [{ game, revision: Number(params[1]) + 1, restart_required: true, options: [{ name: 'mode', title: 'Mode', description: '', category: 'Game', type: 'text', value: String((params[2] as Array<{ value?: unknown }>)[0]?.value ?? game), sensitive: false, has_value: true, hidden: false, disabled: false, elements: [] }] }];
+    }
     if (module === 'config' && fn === 'get_options') {
       const game = String(params[0]);
       await delay(this.optionDelay.get(game) ?? 0);
@@ -125,6 +131,31 @@ test('staged option draft keeps its values and base revision across refreshes', 
   assert.equal(draft.values.mode, 'staged');
   assert.equal(draft.revision, 7);
   assert.deepEqual(optionDraftChanges(draft, snapshot('A', 8, 'new-server').options), [{ name: 'mode', value: 'staged' }]);
+});
+
+test('delayed game switch cannot save an old draft against the new game', async () => {
+  const api = new FeatureRpc(); api.optionDelay.set('B', 35);
+  const controller = useController(() => api);
+  const draft: OptionDraftState = { game: '', revision: undefined, values: {}, touched: {} };
+  try {
+    await controller.startDemo(); await controller.refreshGames(); await controller.refreshOptions('A');
+    mergeOptionDraft(draft, controller.options.value);
+    setOptionDraftValue(draft, 'mode', 'typed while A is visible');
+    const switching = controller.refreshOptions('B');
+    await delay(2);
+    assert.equal(controller.options.value?.game, 'A');
+    await switching;
+    const server = controller.options.value!;
+    assert.equal(server.game, 'B');
+    assert.deepEqual(optionDraftChanges(draft, server.options, server.game), []);
+    assert.equal(api.savedOptions.length, 0);
+
+    clearOptionDraft(draft); mergeOptionDraft(draft, server); setOptionDraftValue(draft, 'mode', 'typed for B');
+    const changes = optionDraftChanges(draft, server.options, server.game);
+    assert.deepEqual(changes, [{ name: 'mode', value: 'typed for B' }]);
+    assert.equal(await controller.saveOptions(changes, draft.revision), true);
+    assert.equal(api.savedOptions[0]![0], 'B');
+  } finally { controller.disconnect(); }
 });
 
 test('card manager draft clears on disconnect and clones reactive host cards', () => {

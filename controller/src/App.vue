@@ -42,6 +42,7 @@ const machineCards = ref<{ index: number; card_id: string }[]>([]);
 const optionGame = ref('');
 const optionSearch = ref('');
 const optionShowHidden = ref(false);
+const optionsLoading = ref(false);
 const optionDraft = reactive<Record<string, string>>({});
 const optionTouched = reactive<Record<string, boolean>>({});
 const optionDraftState = reactive<OptionDraftState>({ game: '', revision: undefined, values: optionDraft, touched: optionTouched });
@@ -55,6 +56,7 @@ const offline = ref(!navigator.onLine);
 const modeLabel = computed(() => demo.value ? t('status.demo') : ({ disconnected: t('status.disconnected'), connecting: t('status.connecting'), connected: t('status.connected'), error: t('status.error') })[status.value]);
 const scalePercent = (axis: 'x' | 'y') => Math.round(currentScene.value[axis === 'x' ? 'scale_x' : 'scale_y'] * 1000) / 10;
 const controlsDisabled = computed(() => !connected.value || !!busy.value || !resize.value);
+const optionsLocked = computed(() => optionsLoading.value || !!busy.value);
 const featureReady = computed(() => connected.value && (demo.value || configuredPassword.value));
 const boardStyle = computed(() => ({ transform: resize.value?.enabled ? `translate(${currentScene.value.offset_x}px, ${currentScene.value.offset_y}px) scale(${currentScene.value.scale_x}, ${currentScene.value.scale_y})` : 'none' }));
 const position = computed(() => `X ${signed(currentScene.value.offset_x)} px · Y ${signed(currentScene.value.offset_y)} px`);
@@ -185,36 +187,64 @@ const visiblePatches = computed(() => {
   const query = patchSearch.value.trim().toLowerCase();
   return (patches.value?.patches ?? []).filter(p => !query || [p.name, p.id, p.group, p.description].some(text => text.toLowerCase().includes(query)));
 });
-async function openOptions(): Promise<void> { tab.value = 'settings'; if (!featureReady.value) return; await c.refreshGames(); await c.refreshOptions(optionGame.value || undefined); syncOptionDraft(); }
+async function openOptions(): Promise<void> {
+  tab.value = 'settings';
+  if (!featureReady.value || optionsLoading.value) return;
+  optionsLoading.value = true;
+  try {
+    await c.refreshGames();
+    if (!featureReady.value) return;
+    await c.refreshOptions(optionGame.value || undefined);
+    syncOptionDraft();
+  } finally { optionsLoading.value = false; }
+}
 async function reloadOptions(): Promise<void> {
+  if (!featureReady.value || optionsLoading.value) return;
   const targetGame = optionDraftState.game || optionGame.value || options.value?.game || games.value?.current;
-  if (optionDirty.value) {
-    if (!window.confirm(t('options.discardConfirm'))) return;
-    clearOptionDraft();
-  }
-  await c.refreshOptions(targetGame);
-  syncOptionDraft();
+  optionsLoading.value = true;
+  try {
+    if (optionDirty.value) {
+      if (!window.confirm(t('options.discardConfirm'))) return;
+      clearOptionDraft();
+    }
+    if (!featureReady.value) return;
+    await c.refreshOptions(targetGame);
+    syncOptionDraft();
+  } finally { optionsLoading.value = false; }
 }
 async function selectOptionGame(): Promise<void> {
+  if (optionsLoading.value) {
+    optionGame.value = optionDraftState.game || options.value?.game || '';
+    return;
+  }
   const requestedGame = optionGame.value;
   const stateGame = optionDraftState.game || options.value?.game || '';
   if (!optionDraftState.game && stateGame) optionDraftState.game = stateGame;
   const change = prepareOptionGameChange(optionDraftState, requestedGame, () => window.confirm(t('options.discardConfirm')));
   if (!change.accepted) { optionGame.value = change.game; return; }
-  optionGame.value = change.game;
-  await c.refreshOptions(change.game); syncOptionDraft();
+  optionsLoading.value = true;
+  try {
+    optionGame.value = change.game;
+    await c.refreshOptions(change.game); syncOptionDraft();
+  } finally { optionsLoading.value = false; }
 }
 async function saveOptionDraft(): Promise<void> {
-  if (!options.value) return;
-  const changes = optionDraftChanges(optionDraftState, options.value.options);
+  if (optionsLocked.value || !options.value || optionDraftState.game !== options.value.game || optionGame.value !== options.value.game) return;
+  const changes = optionDraftChanges(optionDraftState, options.value.options, options.value.game);
   if (changes.length && await c.saveOptions(changes, optionDraftState.revision)) {
     clearOptionDraftTouches(optionDraftState, changes);
     syncOptionDraft();
   }
 }
-function markOption(name: string): void { optionTouched[name] = true; }
+function markOption(name: string): void { if (!optionsLocked.value) optionTouched[name] = true; }
 function setOptionValue(name: string, event: Event): void {
+  if (optionsLocked.value) return;
   setOptionDraftValue(optionDraftState, name, (event.target as HTMLInputElement).value);
+}
+function setOptionBoolean(name: string, event: Event): void {
+  if (optionsLocked.value) return;
+  optionDraft[name] = (event.target as HTMLInputElement).checked ? '/ENABLED' : '';
+  markOption(name);
 }
 function optionInputType(option: OptionField): string { return option.sensitive ? 'password' : 'text'; }
 function optionColor(card: ManagedCard): string { return '#' + card.color.map(value => Math.round(Math.max(0, Math.min(1, value)) * 255).toString(16).padStart(2, '0')).join(''); }
@@ -328,13 +358,13 @@ onBeforeUnmount(() => {
     </nav>
     <main class="main-content">
       <section v-show="tab === 'settings'" aria-labelledby="options-title">
-        <div class="page-title"><h1 id="options-title">{{ t('options.title') }}</h1><div class="button-row"><select v-if="games" v-model="optionGame" :aria-label="t('options.game')" :disabled="!featureReady || !!busy" @change="selectOptionGame"><option v-for="name in games.games" :key="name" :value="name">{{ name }}</option></select><button class="quiet compact" :disabled="!!busy || !featureReady" @click="reloadOptions">{{ t('options.reload') }}</button></div></div>
-        <div v-if="featureErrors.options" class="empty-state"><h2>{{ t('options.unavailable') }}</h2><p>{{ featureErrors.options }}</p><button @click="openOptions">{{ t('options.retry') }}</button></div>
-        <div v-else-if="!options" class="empty-state"><h2>{{ t('options.loading') }}</h2><p>{{ t('options.hint') }}</p><p v-if="connected && !featureReady" class="muted small">{{ t('options.passwordHint') }}</p><button :disabled="!featureReady || !!busy" @click="openOptions">{{ t('options.load') }}</button></div>
+        <div class="page-title"><h1 id="options-title">{{ t('options.title') }}</h1><div class="button-row"><select v-if="games" v-model="optionGame" :aria-label="t('options.game')" :disabled="!featureReady || optionsLocked" @change="selectOptionGame"><option v-for="name in games.games" :key="name" :value="name">{{ name }}</option></select><button class="quiet compact" :disabled="optionsLocked || !featureReady" @click="reloadOptions">{{ t('options.reload') }}</button></div></div>
+        <div v-if="featureErrors.options" class="empty-state"><h2>{{ t('options.unavailable') }}</h2><p>{{ featureErrors.options }}</p><button :disabled="optionsLocked || !featureReady" @click="openOptions">{{ t('options.retry') }}</button></div>
+        <div v-else-if="!options" class="empty-state"><h2>{{ t('options.loading') }}</h2><p>{{ t('options.hint') }}</p><p v-if="connected && !featureReady" class="muted small">{{ t('options.passwordHint') }}</p><button :disabled="!featureReady || optionsLocked" @click="openOptions">{{ t('options.load') }}</button></div>
         <template v-else>
-          <div class="settings-panel feature-toolbar"><label class="stacked-field">{{ t('options.search') }}<input v-model="optionSearch" type="search" :disabled="!!busy"></label><label class="check"><input v-model="optionShowHidden" type="checkbox" :disabled="!!busy">{{ t('options.showHidden') }}</label><span class="muted small">{{ options.restart_required ? t('options.restartHint') : t('options.liveHint') }}</span></div>
-          <div v-for="[category, fields] in optionGroups" :key="category" class="settings-panel feature-group"><h2>{{ category }}</h2><div v-for="option in fields" :key="option.name" class="feature-field"><div class="field-header"><label :for="'option-' + option.name">{{ option.title }}</label><span v-if="option.sensitive" class="muted small">{{ t('options.sensitive') }}</span></div><p v-if="option.description" class="muted small">{{ option.description }}</p><label v-if="option.type === 'bool'" class="check"><input :id="'option-' + option.name" type="checkbox" :checked="optionDraft[option.name] !== ''" :disabled="option.disabled || !!busy" @change="optionDraft[option.name] = ($event.target as HTMLInputElement).checked ? '/ENABLED' : ''; markOption(option.name)">{{ optionDraft[option.name] !== '' ? t('options.on') : t('options.off') }}</label><select v-else-if="option.type === 'enum'" :id="'option-' + option.name" v-model="optionDraft[option.name]" :disabled="option.disabled || !!busy" @change="markOption(option.name)"><option value="">{{ t('options.default') }}</option><option v-for="element in option.elements" :key="element.value" :value="element.value">{{ element.label || element.value }}</option></select><input v-else :id="'option-' + option.name" :value="optionDraft[option.name]" :type="optionInputType(option)" :inputmode="option.type === 'integer' ? 'numeric' : undefined" :autocomplete="option.sensitive ? 'off' : undefined" :disabled="option.disabled || !!busy" :placeholder="option.sensitive ? t('options.sensitivePlaceholder') : ''" @input="setOptionValue(option.name, $event)"><span v-if="option.hidden" class="muted small">{{ t('options.hidden') }}</span></div></div>
-          <div class="panel-actions"><button class="primary" :disabled="!!busy || !featureReady" @click="saveOptionDraft">{{ t('options.save') }}</button><span class="muted small">{{ t('options.revision', { n: options.revision }) }}</span></div>
+          <div class="settings-panel feature-toolbar"><label class="stacked-field">{{ t('options.search') }}<input v-model="optionSearch" type="search" :disabled="optionsLocked"></label><label class="check"><input v-model="optionShowHidden" type="checkbox" :disabled="optionsLocked">{{ t('options.showHidden') }}</label><span class="muted small">{{ options.restart_required ? t('options.restartHint') : t('options.liveHint') }}</span></div>
+          <div v-for="[category, fields] in optionGroups" :key="category" class="settings-panel feature-group"><h2>{{ category }}</h2><div v-for="option in fields" :key="option.name" class="feature-field"><div class="field-header"><label :for="'option-' + option.name">{{ option.title }}</label><span v-if="option.sensitive" class="muted small">{{ t('options.sensitive') }}</span></div><p v-if="option.description" class="muted small">{{ option.description }}</p><label v-if="option.type === 'bool'" class="check"><input :id="'option-' + option.name" type="checkbox" :checked="optionDraft[option.name] !== ''" :disabled="option.disabled || optionsLocked" @change="setOptionBoolean(option.name, $event)">{{ optionDraft[option.name] !== '' ? t('options.on') : t('options.off') }}</label><select v-else-if="option.type === 'enum'" :id="'option-' + option.name" :value="optionDraft[option.name]" :disabled="option.disabled || optionsLocked" @change="setOptionValue(option.name, $event)"><option value="">{{ t('options.default') }}</option><option v-for="element in option.elements" :key="element.value" :value="element.value">{{ element.label || element.value }}</option></select><input v-else :id="'option-' + option.name" :value="optionDraft[option.name]" :type="optionInputType(option)" :inputmode="option.type === 'integer' ? 'numeric' : undefined" :autocomplete="option.sensitive ? 'off' : undefined" :disabled="option.disabled || optionsLocked" :placeholder="option.sensitive ? t('options.sensitivePlaceholder') : ''" @input="setOptionValue(option.name, $event)"><span v-if="option.hidden" class="muted small">{{ t('options.hidden') }}</span></div></div>
+          <div class="panel-actions"><button class="primary" :disabled="optionsLocked || !featureReady" @click="saveOptionDraft">{{ t('options.save') }}</button><span class="muted small">{{ t('options.revision', { n: options.revision }) }}</span></div>
         </template>
       </section>
       <section v-show="tab === 'patches'" aria-labelledby="patches-title">

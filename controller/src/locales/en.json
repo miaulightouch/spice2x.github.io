@@ -116,7 +116,7 @@
   "action.unsaved": "Unsaved calibration may be lost when the game closes.",
   "action.confirm": "{action} on “{machine}”?\n{detail}",
   "action.demoPrefix": "Demo: ",
-  "cards.title": "Cards & keypad",
+  "cards.title": "Cards",
   "cards.reader": "Reader",
   "cards.insertTitle": "Insert card",
   "cards.number": "Card number",

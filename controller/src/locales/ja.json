@@ -116,7 +116,7 @@
   "action.unsaved": "未保存の調整はゲーム終了時に失われる可能性があります。",
   "action.confirm": "「{machine}」で「{action}」を実行しますか？\n{detail}",
   "action.demoPrefix": "デモ：",
-  "cards.title": "カードとテンキー",
+  "cards.title": "カード",
   "cards.reader": "リーダー",
   "cards.insertTitle": "カードを挿入",
   "cards.number": "カード番号",

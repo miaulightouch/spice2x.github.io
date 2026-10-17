@@ -116,7 +116,7 @@
   "action.unsaved": "尚有未儲存的校正設定，可能在遊戲結束後遺失。",
   "action.confirm": "對「{machine}」執行：{action}？\n{detail}",
   "action.demoPrefix": "示範：",
-  "cards.title": "卡片與數字鍵",
+  "cards.title": "卡片",
   "cards.reader": "讀卡器",
   "cards.insertTitle": "插入卡片",
   "cards.number": "卡號",

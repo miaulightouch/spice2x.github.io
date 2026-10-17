@@ -42,7 +42,8 @@ export function setOptionDraftValue(state: OptionDraftState, name: string, value
   state.touched[name] = true;
 }
 
-export function optionDraftChanges(state: OptionDraftState, options: OptionField[]): Array<{ name: string; value: string }> {
+export function optionDraftChanges(state: OptionDraftState, options: OptionField[], serverGame = state.game): Array<{ name: string; value: string }> {
+  if (state.game !== serverGame) return [];
   return options.filter(option => state.touched[option.name] && state.values[option.name] !== undefined)
     .map(option => ({ name: option.name, value: state.values[option.name]! }));
 }

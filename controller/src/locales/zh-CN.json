@@ -116,7 +116,7 @@
   "action.unsaved": "仍有未保存的校准设置，可能在游戏结束后丢失。",
   "action.confirm": "对“{machine}”执行：{action}？\n{detail}",
   "action.demoPrefix": "演示：",
-  "cards.title": "卡片与数字键",
+  "cards.title": "卡片",
   "cards.reader": "读卡器",
   "cards.insertTitle": "插入卡片",
   "cards.number": "卡号",
