@@ -12,6 +12,8 @@ namespace api::modules {
     private:
 
         // function definitions
+        void capabilities(Request &req, Response &res);
+        void insert_card(Request &req, Response &res);
         void write(Request &req, Response &res);
         void set(Request &req, Response &res);
         void get(Request &req, Response &res);

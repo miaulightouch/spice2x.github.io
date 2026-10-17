@@ -13,6 +13,21 @@ export interface OptionElement {
   label: string;
 }
 
+export function parseOptionChoices(data: unknown[], name: string, picker?: string): OptionElement[] {
+  const raw = data[0];
+  if (!isRecord(raw) || raw.name !== name || !Array.isArray(raw.choices)) return fail('Invalid option choices');
+  return raw.choices.map(choice => {
+    if (!isRecord(choice)) return fail('Invalid option choice');
+    const value = stringValue(choice.value, 'choice.value');
+    if (picker === 'cpu_affinity') {
+      if (!/^0x[0-9a-f]{1,16}$/i.test(value)) return fail('Invalid CPU choice');
+      const mask = BigInt(value);
+      if (!mask || (mask & (mask - 1n)) !== 0n) return fail('Invalid CPU choice');
+    }
+    return { value, label: stringValue(choice.label, 'choice.label') };
+  });
+}
+
 export interface OptionField {
   name: string;
   title: string;
@@ -25,6 +40,11 @@ export interface OptionField {
   hidden: boolean;
   disabled: boolean;
   elements: OptionElement[];
+  display_name?: string;
+  setting_name?: string;
+  quick_setting_category?: string;
+  picker?: string;
+  file_extension?: string;
 }
 
 export interface OptionsState {
@@ -32,6 +52,7 @@ export interface OptionsState {
   revision: number;
   restart_required: boolean;
   options: OptionField[];
+  quick_categories?: string[];
 }
 
 export type PatchType = 'memory' | 'signature' | 'union' | 'integer';
@@ -43,6 +64,7 @@ export interface PatchEntry {
   description: string;
   caution: string;
   group: string;
+  game_code?: string;
   type: PatchType;
   enabled: boolean;
   status: PatchStatus;
@@ -65,6 +87,32 @@ export interface PatchState {
   recent_urls: string[];
   import_errors: string;
   patches: PatchEntry[];
+  identity?: { game_identifier: string; pe_identifier: string; patch_file: string };
+  groups?: Array<{ game_code: string; id: string; name: string; description: string; caution: string }>;
+}
+
+export function groupPatches(state: PatchState | undefined, search: string, sort: string) {
+  const query = search.trim().toLowerCase();
+  const groups = new Map<string, PatchEntry[]>();
+  const metadata = new Map(state?.groups?.map(group => [JSON.stringify([group.game_code, group.id]), group]));
+  const sorted = [...(state?.patches ?? [])].sort((a, b) => sort === 'status'
+    ? a.status.localeCompare(b.status) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name));
+  for (const patch of sorted) {
+    const key = JSON.stringify([patch.game_code ?? '', patch.group]);
+    const items = groups.get(key) ?? []; items.push(patch); groups.set(key, items);
+  }
+  return [...groups].flatMap(([key, members]) => {
+    const { group: id, game_code = '' } = members[0]!;
+    const group = metadata.get(key);
+    const matches = (values: string[]) => !query || values.some(value => value.toLowerCase().includes(query));
+    const groupMatches = group && matches([group.name, group.description, group.caution]);
+    const items = groupMatches ? members : members.filter(patch => matches([patch.id, patch.name, patch.group, patch.description, patch.caution]));
+    if (!items.length) return [];
+    const hasError = members.some(patch => patch.status === 'error');
+    return [{ key, id, game_code, items, metadata: group, hasError,
+      checked: members.every(patch => patch.status === 'enabled'),
+      mixed: !hasError && members.some(patch => patch.status === 'enabled') && members.some(patch => patch.status === 'disabled') }];
+  });
 }
 
 export function normalizePatchUrl(value: string): string {
@@ -88,6 +136,23 @@ export interface CardManagerState {
   revision: number;
   cards: ManagedCard[];
   active: [string, string];
+  read_only?: Array<{ name: string; id: string; source: string }>;
+}
+
+export interface KeypadCapabilities {
+  model: string;
+  keypad_count: number;
+  keys: boolean;
+  insert_card: boolean;
+}
+
+export function parseKeypadCapabilities(data: unknown[]): KeypadCapabilities {
+  const value = data[0];
+  if (!isRecord(value)) return fail('Invalid keypad capabilities');
+  const count = integerValue(value.keypad_count, 'keypad_count');
+  if (count < 0 || count > 2) return fail('Invalid keypad count');
+  return { model: stringValue(value.model, 'model'), keypad_count: count,
+    keys: boolValue(value.keys, 'keys'), insert_card: boolValue(value.insert_card, 'insert_card') };
 }
 
 export interface IoButton {
@@ -115,11 +180,11 @@ export interface IoSnapshot {
 }
 
 export function generateCardId(): string {
-  const bytes = new Uint8Array(8);
+  const bytes = new Uint8Array(4);
   const cryptoApi = globalThis.crypto;
   if (cryptoApi?.getRandomValues) cryptoApi.getRandomValues(bytes);
   else for (let index = 0; index < bytes.length; index++) bytes[index] = Math.floor(Math.random() * 256);
-  return [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
+  return 'E0040100' + [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
 }
 
 function fail(message: string): never {
@@ -177,6 +242,7 @@ export function parseOptions(data: unknown[]): OptionsState {
     game: stringValue(value.game, 'game'),
     revision: revisionValue(value.revision, 'revision'),
     restart_required: boolValue(value.restart_required, 'restart_required'),
+    quick_categories: value.quick_categories === undefined ? [] : arrayValue(value.quick_categories, 'quick_categories').map(item => stringValue(item, 'quick_category')),
     options: value.options.map((raw, index) => {
       if (!isRecord(raw) || !OPTION_TYPES.includes(raw.type as OptionType)) return fail(`Invalid option ${index}`);
       return {
@@ -197,6 +263,11 @@ export function parseOptions(data: unknown[]): OptionsState {
             label: stringValue(item.label, `options[${index}].elements[${elementIndex}].label`),
           };
         }),
+        display_name: raw.display_name === undefined ? '' : stringValue(raw.display_name, 'display_name'),
+        setting_name: raw.setting_name === undefined ? '' : stringValue(raw.setting_name, 'setting_name'),
+        quick_setting_category: raw.quick_setting_category === undefined ? '' : stringValue(raw.quick_setting_category, 'quick_setting_category'),
+        picker: raw.picker === undefined ? 'none' : stringValue(raw.picker, 'picker'),
+        file_extension: raw.file_extension === undefined ? '' : stringValue(raw.file_extension, 'file_extension'),
       };
     }),
   };
@@ -217,6 +288,12 @@ export function parsePatches(data: unknown[]): PatchState {
     import_url: value.import_url === undefined ? '' : stringValue(value.import_url, 'import_url'),
     recent_urls: value.recent_urls === undefined ? [] : arrayValue(value.recent_urls, 'recent_urls').map((url, index) => stringValue(url, `recent_urls[${index}]`)),
     import_errors: value.import_errors === undefined ? '' : stringValue(value.import_errors, 'import_errors'),
+    ...(value.identity === undefined ? {} : { identity: parsePatchIdentity(value.identity) }),
+    groups: value.groups === undefined ? [] : arrayValue(value.groups, 'groups').map(raw => {
+      if (!isRecord(raw)) return fail('Invalid patch group');
+      return { game_code: stringValue(raw.game_code, 'group.game_code'), id: stringValue(raw.id, 'group.id'), name: stringValue(raw.name, 'group.name'), description: stringValue(raw.description, 'group.description'),
+        caution: stringValue(raw.caution, 'group.caution') };
+    }),
     patches: value.patches.map((raw, index) => {
       if (!isRecord(raw) || !PATCH_TYPES.includes(raw.type as PatchType) || !PATCH_STATUS.includes(raw.status as PatchStatus)) {
         return fail(`Invalid patch ${index}`);
@@ -227,6 +304,7 @@ export function parsePatches(data: unknown[]): PatchState {
         description: stringValue(raw.description, `patches[${index}].description`),
         caution: stringValue(raw.caution, `patches[${index}].caution`),
         group: stringValue(raw.group, `patches[${index}].group`),
+        game_code: raw.game_code === undefined ? '' : stringValue(raw.game_code, `patches[${index}].game_code`),
         type: raw.type as PatchType,
         enabled: boolValue(raw.enabled, `patches[${index}].enabled`),
         status: raw.status as PatchStatus,
@@ -246,6 +324,12 @@ export function parsePatches(data: unknown[]): PatchState {
       return patch;
     }),
   };
+}
+
+function parsePatchIdentity(raw: unknown): NonNullable<PatchState['identity']> {
+  if (!isRecord(raw)) return fail('Invalid patch identity');
+  return { game_identifier: stringValue(raw.game_identifier, 'game_identifier'),
+    pe_identifier: stringValue(raw.pe_identifier, 'pe_identifier'), patch_file: stringValue(raw.patch_file, 'patch_file') };
 }
 
 function parseColor(value: unknown, field: string): [number, number, number] {
@@ -273,6 +357,12 @@ export function parseCardManager(data: unknown[]): CardManagerState {
       return { name: stringValue(raw.name, `cards[${index}].name`), id, color: parseColor(raw.color, `cards[${index}].color`) };
     }),
     active,
+    read_only: value.read_only === undefined ? [] : arrayValue(value.read_only, 'read_only').map(raw => {
+      if (!isRecord(raw)) return fail('Invalid read-only card');
+      const id = stringValue(raw.id, 'read_only.id').toUpperCase();
+      if (!/^[0-9A-F]{16}$/.test(id)) return fail('Invalid read-only card id');
+      return { id, name: stringValue(raw.name, 'read_only.name'), source: stringValue(raw.source, 'read_only.source') };
+    }),
   };
 }
 

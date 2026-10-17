@@ -59,3 +59,16 @@ export function prepareOptionGameChange(state: OptionDraftState, requestedGame: 
   }
   return { accepted: true, game: requestedGame };
 }
+
+export function validOptionValue(option: OptionField, value: string): boolean {
+  if (!value) return true;
+  if (value.length > 4096 || value.includes('\0')) return false;
+  if (option.type === 'integer') return /^\d+$/.test(value) && Number(value) <= 0xffffffff;
+  if (option.type === 'hex') {
+    if (!/^(?:0x)?[0-9a-f]+$/i.test(value)) return false;
+    return BigInt(/^0x/i.test(value) ? value : '0x' + value) <= 0xffffffffffffffffn;
+  }
+  if (option.type === 'bool') return value === '/ENABLED';
+  if (option.type === 'enum') return option.elements.some(element => element.value === value);
+  return true;
+}

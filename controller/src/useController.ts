@@ -5,17 +5,18 @@ import type { ConnectionStatus, Rpc } from './api/client';
 import { DemoApi } from './api/demo';
 import { ResizeQueue, defaultScene, parseResize } from './api/resize';
 import type { ResizePatch, ResizeState } from './api/resize';
-import { readCaptureFrame as fetchCaptureFrame, readCaptureScreens as fetchCaptureScreens } from './api/capture';
-import type { CaptureFrame } from './api/capture';
+import { readCaptureFrame as fetchCaptureFrame, readCaptureScreens as fetchCaptureScreens, parseCaptureStreams, mjpegUrl } from './api/capture';
+import type { CaptureFrame, CaptureStreams } from './api/capture';
 import type { TextValue } from './i18n';
 import type { Profile } from './storage';
 import { readLog as fetchLog, downloadLog as fetchLogFile } from './api/log';
 import {
-  parseCardManager, parseGames, parseIoAnalogs, parseIoButtons, parseIoLights, parseOptions, parsePatches, normalizePatchUrl,
+  parseCardManager, parseGames, parseIoAnalogs, parseIoButtons, parseIoLights, parseOptions, parsePatches, normalizePatchUrl, parseKeypadCapabilities, parseOptionChoices,
 } from './api/features';
 import type {
-  CardManagerState, GameList, IoAnalog, IoButton, IoLight, OptionsState, PatchState,
+  CardManagerState, GameList, IoAnalog, IoButton, IoLight, OptionsState, PatchState, KeypadCapabilities, OptionElement,
 } from './api/features';
+import { validateIoPulse } from './api/io';
 
 export type MemoryState = {
   mem_total: number;
@@ -63,6 +64,11 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
   const selectedCaptureScreen = ref<number>();
   const captureFrame = ref<CaptureFrame>();
   const captureError = textRef();
+  const streams = ref<CaptureStreams>();
+  const streamUrl = ref('');
+  const keypadCapabilities = ref<KeypadCapabilities>();
+  const avsInfo = ref<Record<string, string>>({});
+  const launcherInfo = ref<Record<string, string>>({});
   const configuredPassword = ref(false);
   const logText = ref('');
   const logSize = ref(0);
@@ -89,6 +95,9 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
   let ioPollBusy = false;
   let ioReadBusy = false;
   let ioPollGeneration = 0;
+  let logPollTimer: ReturnType<typeof setTimeout> | undefined;
+  let logPollGeneration = 0;
+  const logPolling = ref(false);
   let featureSequence = 0;
   const latestFeatureRequests = new Map<string, number>();
 
@@ -97,6 +106,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
   function disconnect(): void {
     ++generation;
     stopIoPolling();
+    stopLogPolling();
     queue?.cancel(); queue = undefined;
     const old = client; client = undefined;
     old?.disconnect(); captureClient?.disconnect(); captureClient = undefined;
@@ -105,6 +115,8 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     resize.value = undefined; resizeError.value = ''; buttons.value = []; confirmed = undefined;
     image.value = ''; imageTime.value = ''; captureScreens.value = []; selectedCaptureScreen.value = undefined;
     captureFrame.value = undefined; captureError.value = ''; capturing.value = false;
+    streams.value = undefined; streamUrl.value = ''; keypadCapabilities.value = undefined;
+    avsInfo.value = {}; launcherInfo.value = {};
     game.value = ''; version.value = ''; memory.value = undefined;
     configuredPassword.value = false; applying.value = false; unsaved.value = false;
     coinQueue.value = undefined; activeProfile = undefined; resizeApplyError = undefined;
@@ -154,8 +166,8 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     if (epoch !== generation) return;
     const [b, a, l, r, c, m] = results;
     if (b?.status === 'fulfilled') buttons.value = b.value.filter(v => Array.isArray(v) && typeof v[0] === 'string').map(v => (v as string[])[0]!);
-    if (a?.status === 'fulfilled' && isRecord(a.value[0])) game.value = String(a.value[0].model ?? '');
-    if (l?.status === 'fulfilled' && isRecord(l.value[0])) version.value = String(l.value[0].version ?? '');
+    if (a?.status === 'fulfilled') acceptAvs(a.value);
+    if (l?.status === 'fulfilled') acceptLauncher(l.value);
     if (m?.status === 'fulfilled') {
       try { memory.value = parseMemory(m.value); } catch { /* Older binaries may omit the optional status payload. */ }
     }
@@ -169,6 +181,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
       resizeError.value = msg('error.resizeUnavailable', { detail: errorText(r.reason) });
     }
     if (client) latency.value = client.latency;
+    await refreshKeypadCapabilities();
   }
 
   function installQueue(rpc: Rpc, epoch: number): void {
@@ -321,7 +334,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     await action('keypad', async () => { await api.value!.request('keypads', 'write', [unit, text]); notify(msg('msg.keypad')); });
   }
 
-  async function captureScreen(screen?: number): Promise<void> {
+  async function captureScreen(screen?: number, quality = 65, divide = 2): Promise<void> {
     if (demo.value) { notify(msg('msg.gridOnly')); return; }
     if (!connected.value || capturing.value || !activeProfile) return;
     const epoch = generation;
@@ -337,7 +350,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
         if (selected === undefined || !screens.includes(selected)) selected = screens[0];
       }
       if (selected === undefined) throw new LocalizedError('error.noCapture');
-      const frame = await fetchCaptureFrame(next, selected);
+      const frame = await fetchCaptureFrame(next, selected, quality, divide);
       if (epoch !== generation) return;
       if (screens) captureScreens.value = screens;
       selectedCaptureScreen.value = selected;
@@ -359,15 +372,83 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
 
   async function capture(): Promise<void> { await captureScreen(); }
 
-  async function readLog(): Promise<void> {
-    await action('log', async () => {
+  async function readLog(pollToken?: number): Promise<boolean> {
+    return action('log', async () => {
       if (!demo.value && !configuredPassword.value) throw new LocalizedError('error.logPassword');
       const epoch = generation;
       const chunk = await fetchLog(api.value!);
-      if (epoch !== generation) return;
+      if (epoch !== generation || (pollToken !== undefined && pollToken !== logPollGeneration)) return;
       logText.value = new TextDecoder().decode(chunk.bytes); logSize.value = chunk.size;
     });
   }
+
+  function stopLogPolling(): void {
+    ++logPollGeneration; clearTimeout(logPollTimer); logPollTimer = undefined; logPolling.value = false;
+  }
+
+  function startLogPolling(): void {
+    stopLogPolling();
+    const token = logPollGeneration;
+    logPolling.value = true;
+    const tick = async (): Promise<void> => {
+      if (token !== logPollGeneration || !connected.value) { if (token === logPollGeneration) stopLogPolling(); return; }
+      const ok = busy.value ? true : await readLog(token);
+      if (token !== logPollGeneration) return;
+      if (!ok) { stopLogPolling(); return; }
+      logPollTimer = setTimeout(() => { void tick(); }, 1000);
+    };
+    void tick();
+  }
+
+  function acceptAvs(data: unknown[]): void {
+    const value = data[0];
+    if (!isRecord(value)) return;
+    avsInfo.value = Object.fromEntries(['model', 'dest', 'spec', 'rev', 'ext', 'services'].filter(key => typeof value[key] === 'string').map(key => [key, value[key] as string]));
+    game.value = avsInfo.value.model ?? '';
+  }
+
+  function acceptLauncher(data: unknown[]): void {
+    const value = data[0];
+    if (!isRecord(value)) return;
+    // Launch arguments can contain API passwords; show only public build/time fields.
+    launcherInfo.value = Object.fromEntries(['version', 'compile_date', 'compile_time', 'system_time'].filter(key => typeof value[key] === 'string').map(key => [key, value[key] as string]));
+    version.value = launcherInfo.value.version ?? '';
+  }
+
+  async function refreshKeypadCapabilities(): Promise<void> {
+    let request: FeatureRequest | undefined;
+    try {
+      request = featureRpc('keypads');
+      const value = parseKeypadCapabilities(await request.rpc.request('keypads', 'capabilities'));
+      if (featureRequestCurrent(request)) keypadCapabilities.value = value;
+    } catch { /* Older hosts keep their existing two-reader controls. */ }
+  }
+
+  async function insertKeypadCard(reader: number): Promise<void> {
+    await action('keypad-insert', async () => {
+      if (!keypadCapabilities.value?.insert_card) throw new LocalizedError('error.featureUnavailable');
+      await api.value!.request('keypads', 'insert_card', [reader]);
+      notify(msg('msg.cardInserted', { n: reader + 1 }));
+    });
+  }
+
+  async function startStream(quality = 65, fps = 30): Promise<void> {
+    await action('stream', async () => {
+      if (!activeProfile) throw new LocalizedError('error.demoCapture');
+      const request = featureRpc('streams');
+      try {
+        const value = parseCaptureStreams(await request.rpc.request('capture', 'get_streams'));
+        if (!featureRequestCurrent(request)) return;
+        streams.value = value;
+        const screen = selectedCaptureScreen.value ?? value?.screens[0]?.screen;
+        if (!value || screen === undefined) throw new LocalizedError('preview.streamUnavailable');
+        streamUrl.value = mjpegUrl(activeProfile.endpoint, value, screen, quality, fps);
+        selectedCaptureScreen.value = screen;
+      } catch (value) { if (featureRequestCurrent(request)) throw value; }
+    });
+  }
+
+  function stopStream(): void { latestFeatureRequests.set('streams', ++featureSequence); streamUrl.value = ''; }
 
   type FeatureRequest = { rpc: Rpc; epoch: number; id: number; key: string };
 
@@ -381,8 +462,8 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
       ]);
       if (!featureRequestCurrent(request)) return;
       const [avs, launcher, memoryResult] = result;
-      if (avs.status === 'fulfilled' && isRecord(avs.value[0])) game.value = String(avs.value[0].model ?? '');
-      if (launcher.status === 'fulfilled' && isRecord(launcher.value[0])) version.value = String(launcher.value[0].version ?? '');
+      if (avs.status === 'fulfilled') acceptAvs(avs.value);
+      if (launcher.status === 'fulfilled') acceptLauncher(launcher.value);
       if (memoryResult.status === 'fulfilled') memory.value = parseMemory(memoryResult.value);
       if (result.every(item => item.status === 'rejected')) throw (result[0] as PromiseRejectedResult).reason;
       featureErrors.value = { ...featureErrors.value, status: '' };
@@ -444,6 +525,19 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     });
   }
 
+  async function getOptionChoices(name: string): Promise<OptionElement[] | undefined> {
+    let choices: OptionElement[] | undefined;
+    await action('option-choices', async () => {
+      const target = options.value?.game;
+      if (!target) throw new LocalizedError('error.featureUnavailable');
+      const request = featureRpc('option-choices');
+      const picker = options.value?.options.find(option => option.name === name)?.picker;
+      const value = parseOptionChoices(await request.rpc.request('config', 'get_option_choices', [target, name]), name, picker);
+      if (featureRequestCurrent(request) && target === options.value?.game) choices = value;
+    });
+    return choices;
+  }
+
   async function refreshPatches(): Promise<void> {
     let request: FeatureRequest | undefined;
     try {
@@ -470,6 +564,19 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
       const value = parsePatches(await rpc.request('patches', 'set_auto_apply', [enabled]));
       if (epoch !== generation) return;
       patches.value = value;
+    });
+  }
+
+  async function patchOperation(fn: 'set_group' | 'disable_all' | 'remove_recent_url' | 'clear_recent_urls', params: unknown[] = []): Promise<void> {
+    await action('patch-' + fn, async () => {
+      const request = featureRpc('patch-operation');
+      try {
+        const value = parsePatches(await request.rpc.request('patches', fn, params));
+        if (featureRequestCurrent(request)) patches.value = value;
+      } catch (value) {
+        if (featureRequestCurrent(request) && value instanceof ApiError) await refreshPatches();
+        throw value;
+      }
     });
   }
 
@@ -558,6 +665,17 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     });
   }
 
+  async function loadAndInsertCard(reader: number, id: string): Promise<void> {
+    await action('manager-insert', async () => {
+      const request = featureRpc('manager-insert');
+      const value = parseCardManager(await request.rpc.request('card', 'manager_set_active', [reader, id]));
+      if (!featureRequestCurrent(request)) return;
+      cardManager.value = value;
+      await request.rpc.request('card', 'insert', [reader, id]);
+      if (featureRequestCurrent(request)) notify(msg('msg.cardInserted', { n: reader + 1 }));
+    });
+  }
+
   async function readIoRequest(pollToken?: number): Promise<void> {
     if (busy.value || ioReadBusy) return;
     ioReadBusy = true;
@@ -585,21 +703,23 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
 
   async function readIo(): Promise<void> { await readIoRequest(); }
 
-  async function testIo(kind: 'button' | 'analog' | 'light', name: string, value = 1): Promise<void> {
+  async function testIo(kind: 'button' | 'analog' | 'light', name: string, value = 1, duration = 180): Promise<void> {
     await action('io-test', async () => {
+      if (!validateIoPulse(value, duration)) throw new LocalizedError('io.invalid');
       const { rpc } = featureRpc('io-test');
-      if (kind === 'button') await rpc.request('buttons', 'pulse', [name, 180]);
-      else await rpc.request(kind === 'analog' ? 'analogs' : 'lights', 'pulse', [name, value, 180]);
+      if (kind === 'button') await rpc.request('buttons', 'pulse', [name, duration]);
+      else await rpc.request(kind === 'analog' ? 'analogs' : 'lights', 'pulse', [name, value, duration]);
       notify(msg('msg.ioTested', { name }));
     });
   }
 
-  async function resetIo(kind?: 'button' | 'analog' | 'light'): Promise<void> {
+  async function resetIo(kind?: 'button' | 'analog' | 'light', name?: string): Promise<void> {
     await action('io-reset', async () => {
       const { rpc } = featureRpc('io-reset');
-      if (!kind || kind === 'button') await rpc.request('buttons', 'write_reset');
-      if (!kind || kind === 'analog') await rpc.request('analogs', 'write_reset');
-      if (!kind || kind === 'light') await rpc.request('lights', 'write_reset');
+      const params = name === undefined ? [] : [[name]];
+      if (!kind || kind === 'button') await rpc.request('buttons', 'write_reset', params);
+      if (!kind || kind === 'analog') await rpc.request('analogs', 'write_reset', params);
+      if (!kind || kind === 'light') await rpc.request('lights', 'write_reset', params);
       notify(msg('msg.ioReset'));
     });
   }
@@ -635,10 +755,11 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     configuredPassword, connected,
     connect, startDemo, disconnect, notify, report, updateResize, selectScene, readResize, saveResize,
     machineControl, pulse, exactButton, releaseButtons, insertCoin, insertCard, getMachineCards, keypad, capture,
-    captureScreen,
-    logText, logSize, readLog, downloadLog, readStatus,
+    captureScreen, streams, streamUrl, startStream, stopStream,
+    keypadCapabilities, refreshKeypadCapabilities, insertKeypadCard, loadAndInsertCard, avsInfo, launcherInfo,
+    logText, logSize, readLog, downloadLog, readStatus, logPolling, startLogPolling, stopLogPolling,
     games, options, patches, cardManager, ioButtons, ioAnalogs, ioLights, featureErrors,
-    refreshGames, refreshOptions, saveOptions, refreshPatches, setPatch, setPatchAutoApply, savePatches, reloadPatches, importPatches,
+    refreshGames, refreshOptions, getOptionChoices, saveOptions, refreshPatches, setPatch, patchOperation, setPatchAutoApply, savePatches, reloadPatches, importPatches,
     refreshCardManager, saveCardManager, setManagerActive, readIo, testIo, resetIo, startIoPolling, stopIoPolling,
     currentScene: computed(() => resize.value?.scenes[(resize.value?.scene ?? 1) - 1] ?? defaultScene()) };
 }
