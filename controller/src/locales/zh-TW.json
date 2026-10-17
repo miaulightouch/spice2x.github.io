@@ -130,8 +130,6 @@
   "cards.deleteLabel": "刪除 {name}",
   "cards.read": "讀取機台預設卡片",
   "cards.fill": "填入卡號",
-  "cards.keypad": "數字鍵",
-  "cards.target": "送至 P{n} 數字鍵盤",
   "connection.add": "新增機台",
   "connection.name": "機台名稱",
   "connection.endpoint": "WebSocket 位址",

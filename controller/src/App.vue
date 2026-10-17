@@ -449,8 +449,13 @@ onBeforeUnmount(() => {
         </div>
       </section>
       <section v-show="tab === 'keypad'" aria-labelledby="keypad-title">
-        <div class="page-title"><h1 id="keypad-title">{{ t('nav.keypad') }}</h1><label class="inline-field">{{ t('cards.reader') }}<select v-model.number="unit"><option :value="0">P1</option><option :value="1">P2</option></select></label></div>
-        <div class="settings-panel keypad-panel"><h2>{{ t('cards.keypad') }}</h2><p class="muted small">{{ t('cards.target', { n: unit + 1 }) }}</p><div class="keypad"><button v-for="key in ['1','2','3','4','5','6','7','8','9','A','0','D']" :key="key" :disabled="!connected || !!busy" @click="c.keypad(unit, key)">{{ key === 'A' ? '00' : key === 'D' ? '.' : key }}</button></div></div>
+        <div class="page-title"><h1 id="keypad-title">{{ t('nav.keypad') }}</h1></div>
+        <div class="keypads-layout">
+          <div v-for="reader in [0,1]" :key="reader" class="settings-panel" role="group" :aria-label="'P' + (reader + 1)">
+            <h2>P{{ reader + 1 }}</h2>
+            <div class="keypad"><button v-for="key in ['1','2','3','4','5','6','7','8','9','A','0','D']" :key="key" :disabled="!connected || !!busy" @click="c.keypad(reader, key)">{{ key === 'A' ? '00' : key === 'D' ? '.' : key }}</button></div>
+          </div>
+        </div>
       </section>
       <section v-show="tab === 'preview'" aria-labelledby="preview-title">
         <div class="page-title"><h1 id="preview-title">{{ t('preview.title') }}</h1><div class="button-row"><select v-if="captureScreens.length" :value="selectedCaptureScreen" :aria-label="t('preview.title')" :disabled="capturing || !connected || demo" @change="c.captureScreen(Number(($event.target as HTMLSelectElement).value))"><option v-for="screen in captureScreens" :key="screen" :value="screen">{{ t('preview.screen', { n: screen + 1 }) }}</option></select><button class="quiet compact" :disabled="!connected || demo || capturing" @click="c.captureScreen()">{{ t(capturing ? 'screen.capturing' : 'screen.refreshCapture') }}</button></div></div>

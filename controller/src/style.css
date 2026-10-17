@@ -146,9 +146,9 @@ summary { min-height: 44px; padding-block: 12px; cursor: pointer; color: var(--a
 .saved-card strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .saved-card code { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
 .machine-card { display: flex; align-items: center; gap: 6px; justify-content: space-between; flex-wrap: wrap; font-size: 12px; overflow-wrap: anywhere; }
+.keypads-layout { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,280px),1fr)); gap: 12px; align-items: start; }
 .keypad { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; margin-top: 10px; }
 .keypad button { min-height: 48px; font-size: 18px; }
-.keypad-panel p { margin-top: 6px; }
 .connection-layout { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,.8fr); gap: 20px; align-items: start; }
 .connection-help { color: var(--muted); font-size: 13px; }
 .connection-help summary { color: var(--ink); font-weight: 550; }
@@ -204,7 +204,6 @@ summary { min-height: 44px; padding-block: 12px; cursor: pointer; color: var(--a
   .calibration-layout,.cards-layout,.connection-layout,.io-grid,.status-grid { grid-template-columns: minmax(0,1fr); gap: 10px; }
   .settings-panel { padding: 10px; }
   .app-footer { padding: 8px 12px; }
-  .keypad-panel { max-width: 430px; width: 100%; }
   .page-title { margin-bottom: 10px; }
   h1 { font-size: 19px; }
   .operation-button span { font-size: 15px; }
