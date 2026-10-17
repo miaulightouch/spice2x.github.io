@@ -2,6 +2,7 @@
 #include <ws2tcpip.h>
 
 #include "websocket.h"
+#include "stream_server.h"
 
 #include <algorithm>
 #include <array>
@@ -32,6 +33,7 @@ namespace api {
 
         // a peer that connects and then says nothing must not hold a slot forever
         constexpr int handshake_timeout_ms = 5000;
+        constexpr int send_timeout_ms = 5000;
         constexpr size_t request_size_limit = 8 * 1024;
         constexpr uint64_t message_size_limit = 64 * 1024;
 
@@ -121,69 +123,32 @@ namespace api {
             return crypt::base64_encode(digest, sizeof(digest));
         }
 
-        bool handshake(SOCKET socket) {
-            std::string request;
-            char byte = 0;
-            bool complete = false;
-
-            while (request.size() < request_size_limit) {
-                const int read = recv(socket, &byte, 1, 0);
-                if (read <= 0) {
-                    return false;
-                }
-
-                request.push_back(byte);
-                if (request.size() >= 4
-                        && request.compare(request.size() - 4, 4, "\r\n\r\n") == 0) {
-                    complete = true;
-                    break;
-                }
-            }
-
+        bool handshake(SOCKET socket, const HttpRequest &request) {
             std::string key;
             std::string version;
             bool connection_upgrade = false;
             bool upgrade = false;
-            const size_t request_line_end = request.find("\r\n");
-                const std::string request_line = request.substr(0, request_line_end);
-                const size_t target_end = request_line.find(' ', 4);
-                const bool valid_request_line = request_line_end != std::string::npos
-                    && request_line.compare(0, 4, "GET ") == 0
-                        && target_end != std::string::npos
-                    && target_end > 4
-                    && target_end == request_line.rfind(' ')
-                    && request_line.substr(target_end + 1) == "HTTP/1.1";
-            size_t pos = request_line_end;
+            const auto key_header = request.headers.find("sec-websocket-key");
+            const auto version_header = request.headers.find("sec-websocket-version");
+            const auto connection_header = request.headers.find("connection");
+            const auto upgrade_header = request.headers.find("upgrade");
 
-            while (pos != std::string::npos) {
-                const size_t end = request.find("\r\n", pos + 2);
-                if (end == std::string::npos || end == pos + 2) {
-                    break;
-                }
-
-                const std::string line = request.substr(pos + 2, end - pos - 2);
-                const size_t colon = line.find(':');
-                if (colon != std::string::npos) {
-                    const std::string name = to_lower(trim(line.substr(0, colon)));
-                    const std::string value = trim(line.substr(colon + 1));
-
-                    if (name == "sec-websocket-key") {
-                        key = value;
-                    } else if (name == "sec-websocket-version") {
-                        version = value;
-                    } else if (name == "connection") {
-                        connection_upgrade = connection_upgrade
-                                || contains_token(value, "upgrade");
-                    } else if (name == "upgrade") {
-                        upgrade = upgrade || contains_token(value, "websocket");
-                    }
-                }
-
-                pos = end;
+            if (key_header != request.headers.end()) {
+                key = trim(key_header->second);
+            }
+            if (version_header != request.headers.end()) {
+                version = trim(version_header->second);
+            }
+            if (connection_header != request.headers.end()) {
+                connection_upgrade = contains_token(connection_header->second, "upgrade");
+            }
+            if (upgrade_header != request.headers.end()) {
+                upgrade = contains_token(upgrade_header->second, "websocket");
             }
 
-                if (!complete || !valid_request_line || !connection_upgrade || !upgrade
-                    || version != "13" || !valid_websocket_key(key)) {
+            if (request.method != "GET" || request.version != "HTTP/1.1"
+                    || !connection_upgrade || !upgrade || version != "13"
+                    || !valid_websocket_key(key)) {
                 send_all(socket,
                         "HTTP/1.1 400 Bad Request\r\n"
                         "Connection: close\r\n"
@@ -434,8 +399,15 @@ namespace api {
                 reinterpret_cast<const char *>(&nodelay), sizeof(nodelay));
 
         set_recv_timeout(socket, handshake_timeout_ms);
-
-        if (handshake(socket)) {
+        const DWORD send_timeout = static_cast<DWORD>(send_timeout_ms);
+        setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO,
+                reinterpret_cast<const char *>(&send_timeout), sizeof(send_timeout));
+        HttpRequest request;
+        if (!read_http_request(socket, request_size_limit, request)) {
+            send_http_error(socket, "400 Bad Request");
+        } else if (!websocket_upgrade_requested(request)) {
+            handle_http_request(socket, request, this->running, address);
+        } else if (handshake(socket, request)) {
             // wslay reads until the socket would block, so leaving it blocking would make
             // every reply wait out a receive timeout before the send got a turn
             u_long non_blocking = 1;

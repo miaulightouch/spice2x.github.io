@@ -319,6 +319,134 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 
 # resources
 ###########
+set(SPICE_CONTROLLER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../controller")
+get_filename_component(SPICE_CONTROLLER_SOURCE_DIR "${SPICE_CONTROLLER_SOURCE_DIR}" ABSOLUTE)
+set(SPICE_CONTROLLER_DEFAULT_HTML "${SPICE_CONTROLLER_SOURCE_DIR}/dist/embedded/index.html")
+set(SPICE_CONTROLLER_HTML "${SPICE_CONTROLLER_DEFAULT_HTML}"
+        CACHE FILEPATH "Prebuilt embedded controller HTML")
+get_filename_component(SPICE_CONTROLLER_HTML "${SPICE_CONTROLLER_HTML}" ABSOLUTE)
+if(NOT "${SPICE_CONTROLLER_HTML}" STREQUAL "${SPICE_CONTROLLER_DEFAULT_HTML}")
+    set(SPICE_CONTROLLER_PREBUILT_ONLY TRUE)
+else()
+    set(SPICE_CONTROLLER_PREBUILT_ONLY FALSE)
+endif()
+
+set(SPICE_CONTROLLER_INPUTS
+        "${SPICE_CONTROLLER_SOURCE_DIR}/index.html"
+        "${SPICE_CONTROLLER_SOURCE_DIR}/package.json"
+        "${SPICE_CONTROLLER_SOURCE_DIR}/package-lock.json"
+        "${SPICE_CONTROLLER_SOURCE_DIR}/vite.config.ts"
+        "${SPICE_CONTROLLER_SOURCE_DIR}/tsconfig.json")
+if(EXISTS "${SPICE_CONTROLLER_SOURCE_DIR}")
+    file(GLOB_RECURSE SPICE_CONTROLLER_SOURCE_FILES CONFIGURE_DEPENDS
+            "${SPICE_CONTROLLER_SOURCE_DIR}/src/*"
+            "${SPICE_CONTROLLER_SOURCE_DIR}/public/*")
+    list(APPEND SPICE_CONTROLLER_INPUTS ${SPICE_CONTROLLER_SOURCE_FILES})
+endif()
+
+set(SPICE_CONTROLLER_GIT_VERSION unknown)
+find_program(SPICE_GIT_EXECUTABLE git)
+if(SPICE_GIT_EXECUTABLE)
+    execute_process(
+            COMMAND "${SPICE_GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/../.." rev-parse --short=7 HEAD
+            OUTPUT_VARIABLE SPICE_CONTROLLER_GIT_VERSION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+    set(SPICE_CONTROLLER_GIT_PATHS HEAD)
+    execute_process(
+            COMMAND "${SPICE_GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+                    rev-parse --symbolic-full-name HEAD
+            OUTPUT_VARIABLE SPICE_CONTROLLER_GIT_REF_NAME
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+    if(SPICE_CONTROLLER_GIT_REF_NAME AND
+            NOT "${SPICE_CONTROLLER_GIT_REF_NAME}" STREQUAL "HEAD")
+        list(APPEND SPICE_CONTROLLER_GIT_PATHS "${SPICE_CONTROLLER_GIT_REF_NAME}")
+    endif()
+    list(APPEND SPICE_CONTROLLER_GIT_PATHS packed-refs)
+    foreach(SPICE_CONTROLLER_GIT_PATH IN LISTS SPICE_CONTROLLER_GIT_PATHS)
+        set(SPICE_CONTROLLER_GIT_PATH_RESULT)
+        execute_process(
+                COMMAND "${SPICE_GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+                        rev-parse --git-path "${SPICE_CONTROLLER_GIT_PATH}"
+                OUTPUT_VARIABLE SPICE_CONTROLLER_GIT_PATH_RESULT
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET)
+        if(SPICE_CONTROLLER_GIT_PATH_RESULT)
+            get_filename_component(SPICE_CONTROLLER_GIT_PATH_RESULT
+                    "${SPICE_CONTROLLER_GIT_PATH_RESULT}" ABSOLUTE
+                    BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+            if(EXISTS "${SPICE_CONTROLLER_GIT_PATH_RESULT}")
+                list(APPEND SPICE_CONTROLLER_INPUTS "${SPICE_CONTROLLER_GIT_PATH_RESULT}")
+            endif()
+        endif()
+    endforeach()
+endif()
+if(NOT SPICE_CONTROLLER_GIT_VERSION)
+    set(SPICE_CONTROLLER_GIT_VERSION unknown)
+endif()
+string(TIMESTAMP SPICE_CONTROLLER_BUILD_DATE "%y-%m-%d" UTC)
+set(SPICE_CONTROLLER_BUILD_VERSION "${SPICE_CONTROLLER_BUILD_DATE}-${SPICE_CONTROLLER_GIT_VERSION}")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../../build")
+set(SPICE_CONTROLLER_VERSION_STAMP "${CMAKE_CURRENT_SOURCE_DIR}/../../build/controller.version")
+set(SPICE_CONTROLLER_VERSION_INPUT "${CMAKE_CURRENT_BINARY_DIR}/controller.version.input")
+file(WRITE "${SPICE_CONTROLLER_VERSION_INPUT}" "${SPICE_CONTROLLER_BUILD_VERSION}\n")
+execute_process(COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${SPICE_CONTROLLER_VERSION_INPUT}" "${SPICE_CONTROLLER_VERSION_STAMP}")
+file(REMOVE "${SPICE_CONTROLLER_VERSION_INPUT}")
+list(APPEND SPICE_CONTROLLER_INPUTS "${SPICE_CONTROLLER_VERSION_STAMP}")
+
+set(SPICE_CONTROLLER_HTML_STALE FALSE)
+if(EXISTS "${SPICE_CONTROLLER_HTML}")
+    foreach(SPICE_CONTROLLER_INPUT IN LISTS SPICE_CONTROLLER_INPUTS)
+        if(EXISTS "${SPICE_CONTROLLER_INPUT}" AND
+                "${SPICE_CONTROLLER_INPUT}" IS_NEWER_THAN "${SPICE_CONTROLLER_HTML}")
+            set(SPICE_CONTROLLER_HTML_STALE TRUE)
+        endif()
+    endforeach()
+endif()
+
+if(EXISTS "${SPICE_CONTROLLER_SOURCE_DIR}/package.json" AND NOT SPICE_CONTROLLER_PREBUILT_ONLY)
+    find_program(SPICE_NODE_EXECUTABLE node)
+    find_program(SPICE_NPM_EXECUTABLE npm)
+    if(SPICE_NODE_EXECUTABLE AND SPICE_NPM_EXECUTABLE)
+        message(STATUS "Building embedded controller HTML with host Node.js (target toolchains do not run Node)")
+        # npm.cmd must return control and its exit code to the generated build script.
+        set(SPICE_NPM_LAUNCHER)
+        if(CMAKE_HOST_WIN32)
+            set(SPICE_NPM_LAUNCHER cmd /c call)
+        endif()
+        add_custom_command(OUTPUT "${SPICE_CONTROLLER_HTML}"
+                COMMAND ${SPICE_NPM_LAUNCHER} "${SPICE_NPM_EXECUTABLE}" ci
+                COMMAND ${SPICE_NPM_LAUNCHER} "${SPICE_NPM_EXECUTABLE}" run build:embedded
+                WORKING_DIRECTORY "${SPICE_CONTROLLER_SOURCE_DIR}"
+                DEPENDS ${SPICE_CONTROLLER_INPUTS}
+                COMMENT "Building embedded controller HTML"
+                VERBATIM)
+    elseif(EXISTS "${SPICE_CONTROLLER_HTML}" AND NOT SPICE_CONTROLLER_HTML_STALE)
+        message(WARNING
+                "Host Node.js/npm is unavailable; using the existing prebuilt embedded controller HTML. "
+                "Install Node.js 22.12+ before changing controller sources.")
+    else()
+        message(FATAL_ERROR
+                "Embedded controller HTML is missing. Install host Node.js 22.12+ and npm, "
+                "then run 'npm ci && npm run build:embedded' in controller/.")
+    endif()
+elseif(EXISTS "${SPICE_CONTROLLER_HTML}")
+    message(STATUS "Using prebuilt embedded controller HTML: ${SPICE_CONTROLLER_HTML}")
+else()
+    message(FATAL_ERROR
+            "Embedded controller source or a prebuilt HTML file is required. "
+            "Set SPICE_CONTROLLER_HTML to a host-built dist/embedded/index.html.")
+endif()
+
+file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/build/resource.h" SPICE_RESOURCE_HEADER_PATH)
+file(TO_CMAKE_PATH "${SPICE_CONTROLLER_HTML}" SPICE_CONTROLLER_HTML_PATH)
+set(SPICE_CONTROLLER_RC "${CMAKE_CURRENT_BINARY_DIR}/spice_controller.rc")
+configure_file(build/controller.rc.in "${SPICE_CONTROLLER_RC}" @ONLY)
+set_source_files_properties("${SPICE_CONTROLLER_RC}" PROPERTIES
+        LANGUAGE RC OBJECT_DEPENDS "${SPICE_CONTROLLER_HTML}")
+
 set_source_files_properties(build/manifest.rc PROPERTIES LANGUAGE RC)
 set_source_files_properties(build/icon.rc PROPERTIES LANGUAGE RC)
 set_source_files_properties(cfg/manifest.rc PROPERTIES LANGUAGE RC)
@@ -829,7 +957,7 @@ endif()
 # spice.exe
 ###########
 
-set(RESOURCE_FILES build/manifest.manifest build/manifest.rc build/icon.rc cfg/Win32D.rc)
+set(RESOURCE_FILES build/manifest.manifest build/manifest.rc build/icon.rc cfg/Win32D.rc ${SPICE_CONTROLLER_RC})
 add_executable(spicetools_spice ${RESOURCE_FILES})
 target_link_libraries(spicetools_spice PRIVATE spicetools_spice_objs)
 set_target_properties(spicetools_spice PROPERTIES PREFIX "")
@@ -842,7 +970,7 @@ endif()
 # spice_laa.exe
 ###########
 
-set(RESOURCE_FILES build/manifest.manifest build/manifest.rc build/icon.rc cfg/Win32D.rc)
+set(RESOURCE_FILES build/manifest.manifest build/manifest.rc build/icon.rc cfg/Win32D.rc ${SPICE_CONTROLLER_RC})
 add_executable(spicetools_spice_laa ${RESOURCE_FILES})
 target_link_libraries(spicetools_spice_laa PRIVATE spicetools_spice_objs)
 set_target_properties(spicetools_spice_laa PROPERTIES PREFIX "")
@@ -855,7 +983,7 @@ endif()
 # spice_linux.exe
 ###########
 
-set(RESOURCE_FILES build/manifest.manifest build/manifest.rc build/icon.rc cfg/Win32D.rc)
+set(RESOURCE_FILES build/manifest.manifest build/manifest.rc build/icon.rc cfg/Win32D.rc ${SPICE_CONTROLLER_RC})
 add_executable(spicetools_spice_linux ${SOURCE_FILES} ${RESOURCE_FILES})
 target_link_libraries(spicetools_spice_linux
         PUBLIC d3d9 ws2_32 version comctl32 shlwapi iphlpapi hid secur32 setupapi psapi winmm winhttp
@@ -871,7 +999,7 @@ endif()
 # spice64.exe
 #############
 
-set(RESOURCE_FILES build/manifest.manifest build/manifest64.rc build/icon.rc cfg/Win32D.rc)
+set(RESOURCE_FILES build/manifest.manifest build/manifest64.rc build/icon.rc cfg/Win32D.rc ${SPICE_CONTROLLER_RC})
 add_executable(spicetools_spice64 ${SOURCE_FILES} ${RESOURCE_FILES})
 
 # do NOT link against: mf, mfplat, mfreadwrite; otherwise unity games will break
@@ -894,7 +1022,7 @@ endif()
 # spice64_linux.exe
 #############
 
-set(RESOURCE_FILES build/manifest.manifest build/manifest64.rc build/icon.rc cfg/Win32D.rc)
+set(RESOURCE_FILES build/manifest.manifest build/manifest64.rc build/icon.rc cfg/Win32D.rc ${SPICE_CONTROLLER_RC})
 add_executable(spicetools_spice64_linux ${SOURCE_FILES} ${RESOURCE_FILES})
 
 # do NOT link against: mf, mfplat, mfreadwrite; otherwise unity games will break

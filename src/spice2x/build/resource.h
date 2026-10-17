@@ -2,6 +2,7 @@
 
 #define IDC_STATIC                      -1
 #define IDD_DIALOG1                     129
+#define SPICE_CONTROLLER_HTML           103
 #define IDR_LICENSES                    131
 #define IDR_PATCHES                     132
 #define IDR_README                      133
