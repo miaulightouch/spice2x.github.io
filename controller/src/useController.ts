@@ -11,7 +11,7 @@ import type { TextValue } from './i18n';
 import type { Profile } from './storage';
 import { readLog as fetchLog, downloadLog as fetchLogFile } from './api/log';
 import {
-  parseCardManager, parseGames, parseIoAnalogs, parseIoButtons, parseIoLights, parseOptions, parsePatches,
+  parseCardManager, parseGames, parseIoAnalogs, parseIoButtons, parseIoLights, parseOptions, parsePatches, normalizePatchUrl,
 } from './api/features';
 import type {
   CardManagerState, GameList, IoAnalog, IoButton, IoLight, OptionsState, PatchState,
@@ -78,6 +78,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
   const api = shallowRef<Rpc>();
   let client: SpiceClient | undefined;
   let captureClient: SpiceClient | undefined;
+  let patchImportClient: SpiceClient | undefined;
   let activeProfile: Profile | undefined;
   let queue: ResizeQueue | undefined;
   let generation = 0;
@@ -99,6 +100,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     queue?.cancel(); queue = undefined;
     const old = client; client = undefined;
     old?.disconnect(); captureClient?.disconnect(); captureClient = undefined;
+    patchImportClient?.disconnect(); patchImportClient = undefined;
     api.value = undefined; status.value = 'disconnected'; demo.value = false;
     resize.value = undefined; resizeError.value = ''; buttons.value = []; confirmed = undefined;
     image.value = ''; imageTime.value = ''; captureScreens.value = []; selectedCaptureScreen.value = undefined;
@@ -489,6 +491,41 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     });
   }
 
+  async function importPatches(url: string): Promise<boolean> {
+    return action('patch-import', async () => {
+      const source = normalizePatchUrl(url);
+      const request = featureRpc('patch-import');
+      if (!patches.value?.can_import) throw new LocalizedError('error.patchImportMode');
+      if (!demo.value && !configuredPassword.value) throw new LocalizedError('patches.passwordHint');
+      const next = demo.value ? undefined : new SpiceClient(120000);
+      let sent = false;
+      try {
+        if (next) {
+          const profile = activeProfile!;
+          patchImportClient = next;
+          await next.connect(profile.endpoint, profile.password);
+        }
+        if (!featureRequestCurrent(request)) return;
+        sent = true;
+        const value = parsePatches(await (next ?? request.rpc).request('patches', 'import_url', [source]));
+        if (!featureRequestCurrent(request)) return;
+        patches.value = value;
+        notify(msg('msg.patchesImported'));
+      } catch (value) {
+        if (!featureRequestCurrent(request)) return;
+        if (value instanceof ApiError) {
+          await refreshPatches();
+          throw value;
+        }
+        if (sent) throw new LocalizedError('error.patchImportUnknown', { detail: renderText(errorText(value)) });
+        throw value;
+      } finally {
+        next?.disconnect();
+        if (patchImportClient === next) patchImportClient = undefined;
+      }
+    });
+  }
+
   async function refreshCardManager(): Promise<void> {
     let request: FeatureRequest | undefined;
     try {
@@ -601,7 +638,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     captureScreen,
     logText, logSize, readLog, downloadLog, readStatus,
     games, options, patches, cardManager, ioButtons, ioAnalogs, ioLights, featureErrors,
-    refreshGames, refreshOptions, saveOptions, refreshPatches, setPatch, setPatchAutoApply, savePatches, reloadPatches,
+    refreshGames, refreshOptions, saveOptions, refreshPatches, setPatch, setPatchAutoApply, savePatches, reloadPatches, importPatches,
     refreshCardManager, saveCardManager, setManagerActive, readIo, testIo, resetIo, startIoPolling, stopIoPolling,
     currentScene: computed(() => resize.value?.scenes[(resize.value?.scene ?? 1) - 1] ?? defaultScene()) };
 }
