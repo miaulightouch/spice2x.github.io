@@ -95,6 +95,8 @@ namespace cfg {
         int screen_resize_current_scene = 0;
         fullscreen_setting scene_settings[8] {};
         bool enable_linear_filter = true;
+        std::uint32_t init_client_width = 0;
+        std::uint32_t init_client_height = 0;
     };
 
     inline ScreenResize *SCREENRESIZE = nullptr;

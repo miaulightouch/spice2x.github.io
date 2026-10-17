@@ -188,6 +188,22 @@ bool readback(int width, int height, unsigned char *out) {
     assert np.all(actual[:12,:,0] == 255) and np.all(actual[:12,:,2] == 0)
     assert np.all(actual[-12:,:,0] == 0) and np.all(actual[-12:,:,2] == 255)
 
+    # A test menu can leave the upper-display viewport active. Preserve both
+    # the upper display and lower panel when fitting the complete original canvas.
+    for linear in (False, True):
+        assert make_current(display,surface,surface,game)
+        disable(0x0c11); clear_color(0,0,0,1); clear(0x4000)
+        enable(0x0c11)
+        scissor(0,0,32,37); clear_color(0,0,1,1); clear(0x4000)
+        scissor(0,37,32,19); clear_color(1,0,0,1); clear(0x4000)
+        viewport(0,37,32,19); finish()
+        assert make_current(display,surface,surface,own)
+        assert draw((0,0,32,56),(48,64),linear=linear)
+        assert render.copies()==1
+        actual=rgb_pixels(48,64)
+        assert np.all(actual[:16] == (255,0,0))
+        assert np.all(actual[-40:] == (0,0,255))
+
     # Viewport limits are cached per private context. Normal FHD is valid, while
     # Mesa's 16384 limit must reject both over-wide and over-tall output untouched.
     limits=(C.c_int*2)(); get_int(0x0d3a,limits)

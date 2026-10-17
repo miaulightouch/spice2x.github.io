@@ -166,9 +166,15 @@ namespace {
         const bool fit = !GRAPHICS_WINDOWED || GRAPHICS_WINDOW_BACKBUFFER_SCALE;
         graphics::opengl::ImageRect source {0, 0, width, height};
         if (fit) {
-            GLint viewport[4] {};
-            gl.glGetIntegerv(GL_VIEWPORT, viewport);
-            source = {viewport[0], viewport[1], viewport[2], viewport[3]};
+            // The last viewport can be only the test menu's upper display, not the full canvas.
+            if (cfg::SCREENRESIZE->init_client_width && cfg::SCREENRESIZE->init_client_height) {
+                source = {0, 0, static_cast<int>(cfg::SCREENRESIZE->init_client_width),
+                    static_cast<int>(cfg::SCREENRESIZE->init_client_height)};
+            } else {
+                GLint viewport[4] {};
+                gl.glGetIntegerv(GL_VIEWPORT, viewport);
+                source = {viewport[0], viewport[1], viewport[2], viewport[3]};
+            }
         }
         const bool resize = graphics::opengl::requires_resize(scene) ||
             (fit && (source.x != 0 || source.y != 0 || source.width != width || source.height != height));
@@ -280,9 +286,17 @@ namespace {
 }
 
 void graphics_opengl_window_created(HWND window, std::string_view title) {
-    // Apply launcher window settings even while the legacy game is still loading its GL context.
-    if (window && GRAPHICS_WINDOWED && eamuse_get_game() == "Jubeat" &&
+    // Preserve the game's canvas before launcher settings resize the main window.
+    if (window && eamuse_get_game() == "Jubeat" &&
             GetModuleHandleW(L"gftools.dll") && title.ends_with(" - jubeat")) {
+        if (!GRAPHICS_WINDOWED) {
+            RECT rect {};
+            if (cfg::SCREENRESIZE && GetClientRect(window, &rect) && rect.right > 0 && rect.bottom > 0) {
+                cfg::SCREENRESIZE->init_client_width = rect.right;
+                cfg::SCREENRESIZE->init_client_height = rect.bottom;
+            }
+            return;
+        }
         graphics_hook_window(window, nullptr);
         RECT rect {};
         if (GetClientRect(window, &rect)) {

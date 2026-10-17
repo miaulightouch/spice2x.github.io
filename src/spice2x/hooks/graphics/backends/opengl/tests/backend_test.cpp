@@ -38,6 +38,8 @@ namespace {
         screen_resize.enable_screen_resize = false;
         screen_resize.screen_resize_current_scene = 0;
         screen_resize.enable_linear_filter = true;
+        screen_resize.init_client_width = 0;
+        screen_resize.init_client_height = 0;
         for (auto &scene : screen_resize.scene_settings) scene = cfg::fullscreen_setting {};
         cfg::SCREENRESIZE = &screen_resize;
         GRAPHICS_WINDOWED = true;
@@ -154,6 +156,58 @@ namespace {
         CHECK(opengl_test::state.drawn_buffers.back() == GL_BACK);
     }
 
+    void test_fit_preserves_full_canvas_across_test_menu_viewports() {
+        for (const bool windowed : {true, false}) {
+            reset_backend();
+            GRAPHICS_WINDOWED = windowed;
+            GRAPHICS_WINDOW_BACKBUFFER_SCALE = windowed;
+            if (windowed) {
+                // graphics_capture_initial_window saves these before applying -windowsize.
+                screen_resize.init_client_width = 768;
+                screen_resize.init_client_height = 1360;
+            } else {
+                opengl_test::state.client_rect = {0, 0, 768, 1360};
+                graphics_opengl_window_created(opengl_test::state.window, "L44 - jubeat");
+                CHECK(screen_resize.init_client_width == 768);
+                CHECK(screen_resize.init_client_height == 1360);
+                CHECK(opengl_test::state.graphics_hook_calls == 0);
+            }
+            opengl_test::state.client_rect = {0, 0, 1080, 1920};
+            screen_resize.enable_screen_resize = true;
+            screen_resize.scene_settings[0].scale_x = .938f;
+            screen_resize.scene_settings[0].scale_y = .938f;
+            screen_resize.scene_settings[0].offset_x = 8;
+            screen_resize.scene_settings[0].offset_y = -8;
+            prime_window();
+            for (const auto viewport : {
+                    opengl_test::State::DrawRecord {0, 0, 768, 1360},
+                    opengl_test::State::DrawRecord {0, 896, 768, 464},
+                    opengl_test::State::DrawRecord {32, 64, 640, 400},
+                    opengl_test::State::DrawRecord {0, 0, 768, 1360}}) {
+                clear_observations();
+                opengl_test::state.viewport[0] = viewport.x;
+                opengl_test::state.viewport[1] = viewport.y;
+                opengl_test::state.viewport[2] = viewport.width;
+                opengl_test::state.viewport[3] = viewport.height;
+                opengl_test::state.capture_requests.push_back(0);
+                present(opengl_test::state.current_dc);
+                CHECK(opengl_test::state.draw_calls == 1);
+                CHECK(opengl_test::state.read_calls == 1);
+                CHECK(opengl_test::state.capture_enqueues == 1);
+                CHECK(opengl_test::state.viewport_queries == 0);
+                const auto &source = opengl_test::state.drawn_sources.back();
+                CHECK(source.x == 0);
+                CHECK(source.y == 0);
+                CHECK(source.width == 768);
+                CHECK(source.height == 1360);
+                CHECK(opengl_test::state.drawn_scenes.back().scale_x == .938f);
+                CHECK(opengl_test::state.drawn_scenes.back().offset_y == -8);
+                CHECK(opengl_test::state.last_capture_width == 1080);
+                CHECK(opengl_test::state.last_capture_height == 1920);
+            }
+        }
+    }
+
     void test_disabled_scene_uses_base_fit_only() {
         reset_backend();
         GRAPHICS_WINDOWED = false;
@@ -197,6 +251,8 @@ namespace {
         reset_backend();
         GRAPHICS_WINDOWED = true;
         GRAPHICS_WINDOW_BACKBUFFER_SCALE = false;
+        screen_resize.init_client_width = 768;
+        screen_resize.init_client_height = 1360;
         opengl_test::state.viewport[2] = 320;
         opengl_test::state.viewport[3] = 240;
         screen_resize.enable_screen_resize = true;
@@ -571,6 +627,7 @@ namespace {
         {"window_created_before_first_context", test_window_created_before_first_context},
         {"window_created_ignores_auxiliary_and_other_games", test_window_created_ignores_auxiliary_and_other_games},
         {"source_destination_fit_draws_once", test_source_destination_fit_draws_once},
+        {"fit_preserves_full_canvas_across_test_menu_viewports", test_fit_preserves_full_canvas_across_test_menu_viewports},
         {"disabled_scene_uses_base_fit_only", test_disabled_scene_uses_base_fit_only},
         {"capture_and_resize_finish_and_read_once", test_capture_and_resize_finish_and_read_once},
         {"windowed_without_backbuffer_scale_uses_client_source", test_windowed_without_backbuffer_scale_uses_client_source},
