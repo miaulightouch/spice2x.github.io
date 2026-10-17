@@ -130,8 +130,6 @@
   "cards.deleteLabel": "删除 {name}",
   "cards.read": "读取机台预设卡片",
   "cards.fill": "填入卡号",
-  "cards.keypad": "数字键",
-  "cards.target": "发送至 P{n} 数字键盘",
   "connection.add": "新增机台",
   "connection.name": "机台名称",
   "connection.endpoint": "WebSocket 地址",
@@ -295,5 +293,15 @@
   "preview.title": "屏幕预览",
   "preview.screen": "屏幕 {n}",
   "preview.empty": "暂无截图。",
-  "preview.hint": "支持 Direct3D 9，手动更新；暂不支持 OpenGL 截图。"
+  "preview.hint": "支持 Direct3D 9，手动更新；暂不支持 OpenGL 截图。",
+  "patches.importUrl": "补丁来源 URL",
+  "patches.import": "导入",
+  "patches.importing": "导入中…",
+  "patches.importMode": "URL 导入仅限 spicecfg 独立模式。",
+  "patches.importUnavailable": "需更新 spice2x，并在 spicecfg 指定游戏 DLL。",
+  "patches.importHint": "来源会收到游戏日期码与 DLL 版本标识。",
+  "msg.patchesImported": "补丁已导入。",
+  "error.patchUrl": "请使用不含账号密码、查询参数或 # 的 HTTP(S) 来源网址。",
+  "error.patchImportMode": "此主机无法导入 URL。",
+  "error.patchImportUnknown": "导入结果未知，请重新读取列表后再重试。{detail}"
 }

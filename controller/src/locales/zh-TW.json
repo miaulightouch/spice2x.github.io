@@ -130,8 +130,6 @@
   "cards.deleteLabel": "刪除 {name}",
   "cards.read": "讀取機台預設卡片",
   "cards.fill": "填入卡號",
-  "cards.keypad": "數字鍵",
-  "cards.target": "送至 P{n} 數字鍵盤",
   "connection.add": "新增機台",
   "connection.name": "機台名稱",
   "connection.endpoint": "WebSocket 位址",
@@ -295,5 +293,15 @@
   "preview.title": "螢幕預覽",
   "preview.screen": "螢幕 {n}",
   "preview.empty": "尚無擷取畫面。",
-  "preview.hint": "支援 Direct3D 9，手動更新；尚不支援 OpenGL 擷取。"
+  "preview.hint": "支援 Direct3D 9，手動更新；尚不支援 OpenGL 擷取。",
+  "patches.importUrl": "修補來源 URL",
+  "patches.import": "匯入",
+  "patches.importing": "匯入中…",
+  "patches.importMode": "URL 匯入僅限 spicecfg 獨立模式。",
+  "patches.importUnavailable": "需更新 spice2x，並在 spicecfg 指定遊戲 DLL。",
+  "patches.importHint": "來源會收到遊戲日期碼與 DLL 版本識別。",
+  "msg.patchesImported": "修補已匯入。",
+  "error.patchUrl": "請使用不含帳密、查詢參數或 # 的 HTTP(S) 來源網址。",
+  "error.patchImportMode": "此主機無法匯入 URL。",
+  "error.patchImportUnknown": "匯入結果未知，請重新讀取列表後再重試。{detail}"
 }

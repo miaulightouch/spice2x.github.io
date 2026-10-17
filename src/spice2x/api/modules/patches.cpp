@@ -1,6 +1,7 @@
 #include "patches.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -60,6 +61,53 @@ namespace api::modules {
             return true;
         }
 
+        std::string validate_patch_url(const std::string &url) {
+            constexpr size_t max_url_length = 4096;
+            if (url.empty()) {
+                return "url must be a nonempty HTTP(S) base URL";
+            }
+            if (url.size() > max_url_length) {
+                return "url is too long";
+            }
+            for (const auto character : url) {
+                const auto byte = static_cast<unsigned char>(character);
+                if (std::iscntrl(byte) || std::isspace(byte)) {
+                    return "url must not contain whitespace or control characters";
+                }
+            }
+
+            size_t authority_start = 0;
+            if (url.compare(0, 7, "http://") == 0) {
+                authority_start = 7;
+            } else if (url.compare(0, 8, "https://") == 0) {
+                authority_start = 8;
+            } else {
+                return "url must start with http:// or https://";
+            }
+
+            if (url.find('?') != std::string::npos || url.find('#') != std::string::npos) {
+                return "url must not contain a query or fragment";
+            }
+
+            const auto authority_end = url.find('/', authority_start);
+            const auto authority = url.substr(
+                authority_start,
+                authority_end == std::string::npos
+                    ? std::string::npos
+                    : authority_end - authority_start);
+            if (authority.empty()) {
+                return "url must contain a nonempty authority";
+            }
+            if (authority.find('@') != std::string::npos) {
+                return "url must not contain userinfo";
+            }
+
+            if (authority.front() == ':') {
+                return "url must contain a nonempty host";
+            }
+            return {};
+        }
+
     }
 
     Patches::Patches() : Module("patches", true) {
@@ -68,6 +116,7 @@ namespace api::modules {
         functions["set_auto_apply"] = std::bind(&Patches::set_auto_apply, this, _1, _2);
         functions["save"] = std::bind(&Patches::save, this, _1, _2);
         functions["reload"] = std::bind(&Patches::reload, this, _1, _2);
+        functions["import_url"] = std::bind(&Patches::import_url, this, _1, _2);
     }
 
     static void prepare() {
@@ -86,6 +135,20 @@ namespace api::modules {
         game.AddMember("auto_apply", patcher::setting_auto_apply, allocator);
         game.AddMember("dirty", patcher::config_dirty, allocator);
         game.AddMember("standalone", cfg::CONFIGURATOR_STANDALONE, allocator);
+        game.AddMember(
+            "can_import",
+            cfg::CONFIGURATOR_STANDALONE && !avs::game::DLL_NAME.empty(),
+            allocator);
+        game.AddMember("import_url", Value(patcher::patch_url.c_str(), allocator), allocator);
+        game.AddMember(
+            "import_errors",
+            Value(patcher::url_fetch_errors.c_str(), allocator),
+            allocator);
+        Value recent_urls(kArrayType);
+        for (const auto &url : patcher::url_recents) {
+            recent_urls.PushBack(Value(url.c_str(), allocator), allocator);
+        }
+        game.AddMember("recent_urls", recent_urls, allocator);
 
         Value patch_list(kArrayType);
         for (auto &patch : patcher::patches) {
@@ -352,6 +415,51 @@ namespace api::modules {
         prepare();
         patcher::config_load();
         patcher::reload_local_patches();
+        add_state(res);
+    }
+
+    void Patches::import_url(Request &req, Response &res) {
+        patcher::StateLock lock;
+        if (!exact_params(req, 1, *this, res)) {
+            return;
+        }
+        if (!req.params[0].IsString()) {
+            return error_type(res, "url", "string");
+        }
+        if (!cfg::CONFIGURATOR_STANDALONE) {
+            return error(res, "Remote patch import is only available in standalone configurator mode.");
+        }
+        if (avs::game::DLL_NAME.empty()) {
+            return error(res, "Remote patch import requires a configured game DLL.");
+        }
+
+        const std::string url(req.params[0].GetString(), req.params[0].GetStringLength());
+        const auto url_error = validate_patch_url(url);
+        if (!url_error.empty()) {
+            return error(res, url_error);
+        }
+
+        prepare();
+        patcher::patch_url = url;
+        patcher::url_recent_idx = static_cast<size_t>(-1);
+        const bool imported = patcher::import_remote_patches_to_disk();
+        bool save_failed = false;
+        if (imported) {
+            if (std::find(patcher::url_recents.begin(), patcher::url_recents.end(), url)
+                    == patcher::url_recents.end()) {
+                patcher::url_recents.emplace_back(url);
+            }
+            save_failed = !patcher::config_save();
+        }
+
+        // The downloader clears the in-memory patch list before fetching, even on failure.
+        patcher::reload_local_patches(true);
+        if (!imported) {
+            return error(res, "Unable to import patches from URL.");
+        }
+        if (save_failed) {
+            return error(res, "Patches imported, but unable to save patch settings.");
+        }
         add_state(res);
     }
 }

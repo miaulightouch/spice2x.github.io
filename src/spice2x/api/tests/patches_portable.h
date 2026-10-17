@@ -16,6 +16,8 @@ inline void patches_test_log(const Args &...) {
 #define log_warning(...) patches_test_log(__VA_ARGS__)
 
 namespace avs::game {
+    inline std::string DLL_NAME = "target.dll";
+
     inline std::string get_identifier() {
         return "PATCH-TEST";
     }
@@ -34,8 +36,12 @@ namespace patcher {
     inline int patches_test_fail_on_apply_call = 0;
     inline int patches_test_apply_calls = 0;
     inline bool patches_test_save_failure = false;
+    inline bool patches_test_import_result = false;
+    inline std::string patches_test_import_error;
     inline int patches_test_reload_count = 0;
     inline int patches_test_save_count = 0;
+    inline int patches_test_import_count = 0;
+    inline std::vector<std::string> patches_test_events;
 
     inline std::filesystem::path config_path;
     inline bool config_dirty = false;
@@ -71,6 +77,7 @@ namespace patcher {
     }
 
     inline void reload_local_patches(bool) {
+        patches_test_events.emplace_back("reload");
         ++patches_test_reload_count;
         local_patches_initialized = true;
     }
@@ -79,12 +86,21 @@ namespace patcher {
     }
 
     inline bool config_save() {
+        patches_test_events.emplace_back("save");
         ++patches_test_save_count;
         if (patches_test_save_failure) {
             return false;
         }
         config_dirty = false;
         return true;
+    }
+
+    inline bool import_remote_patches_to_disk() {
+        patches_test_events.emplace_back("import");
+        ++patches_test_import_count;
+        patches.clear();
+        url_fetch_errors = patches_test_import_error;
+        return patches_test_import_result;
     }
 
     inline PatchStatus is_patch_active(PatchData &patch) {

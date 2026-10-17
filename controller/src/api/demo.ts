@@ -15,6 +15,8 @@ export class DemoApi implements Rpc {
   private optionRevision = 1;
   private patchEnabled = new Map<string, boolean>();
   private patchAutoApply = false;
+  private patchUrl = '';
+  private patchRecentUrls: string[] = [];
   private managerCards = [{ name: 'Demo card', id: 'E004000000000001', color: [0.08, 0.47, 0.39] as [number, number, number] }];
   private managerActive: [string, string] = ['', ''];
   private managerRevision = 1;
@@ -91,9 +93,15 @@ export class DemoApi implements Rpc {
     if (module === 'patches') {
       const patch = { id: 'demo-patch', name: 'Demo patch', description: 'A safe demo patch.', caution: '', group: 'Demo', type: 'memory', enabled: this.patchEnabled.get('demo-patch') ?? false,
         status: 'disabled', error: '', unverified: false, choices: [], selected: '' };
-      if (fn === 'set_auto_apply') { this.patchAutoApply = !!params[0]; return [{ game: 'DEMO', auto_apply: this.patchAutoApply, dirty: false, standalone: true, patches: [patch] }]; }
-      if (fn === 'get' || fn === 'save' || fn === 'reload') return [{ game: 'DEMO', auto_apply: this.patchAutoApply, dirty: false, standalone: true, patches: [patch] }];
-      if (fn === 'set') { const enabled = !!(params[1] as { enabled?: boolean } | undefined)?.enabled; this.patchEnabled.set('demo-patch', enabled); patch.enabled = enabled; return [{ game: 'DEMO', auto_apply: this.patchAutoApply, dirty: false, standalone: true, patches: [patch] }]; }
+      if (fn === 'set_auto_apply') this.patchAutoApply = !!params[0];
+      if (fn === 'import_url') {
+        this.patchUrl = String(params[0]);
+        if (!this.patchRecentUrls.includes(this.patchUrl)) this.patchRecentUrls.push(this.patchUrl);
+      }
+      if (fn === 'set') { const enabled = !!(params[1] as { enabled?: boolean } | undefined)?.enabled; this.patchEnabled.set('demo-patch', enabled); patch.enabled = enabled; }
+      patch.status = patch.enabled ? 'enabled' : 'disabled';
+      if (['get', 'save', 'reload', 'set', 'set_auto_apply', 'import_url'].includes(fn)) return [{ game: 'DEMO', auto_apply: this.patchAutoApply, dirty: false, standalone: true,
+        can_import: true, import_url: this.patchUrl, recent_urls: [...this.patchRecentUrls], import_errors: '', patches: [patch] }];
     }
     if (module === 'card' && fn === 'manager_get') return [{ revision: this.managerRevision, cards: structuredClone(this.managerCards), active: [...this.managerActive] }];
     if (module === 'card' && fn === 'manager_save') {

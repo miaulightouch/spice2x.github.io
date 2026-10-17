@@ -130,8 +130,6 @@
   "cards.deleteLabel": "{name} を削除",
   "cards.read": "筐体のカード設定を読む",
   "cards.fill": "番号を入力",
-  "cards.keypad": "テンキー",
-  "cards.target": "P{n} のテンキーへ送信",
   "connection.add": "筐体を追加",
   "connection.name": "筐体名",
   "connection.endpoint": "WebSocket アドレス",
@@ -295,5 +293,15 @@
   "preview.title": "画面プレビュー",
   "preview.screen": "画面 {n}",
   "preview.empty": "画像はまだありません。",
-  "preview.hint": "Direct3D 9 に対応。手動更新。OpenGL の画像取得は未対応です。"
+  "preview.hint": "Direct3D 9 に対応。手動更新。OpenGL の画像取得は未対応です。",
+  "patches.importUrl": "パッチ配信元 URL",
+  "patches.import": "インポート",
+  "patches.importing": "インポート中…",
+  "patches.importMode": "URL インポートは spicecfg 単独モード専用です。",
+  "patches.importUnavailable": "spice2x を更新し、spicecfg でゲーム DLL を指定してください。",
+  "patches.importHint": "配信元にゲームの日付コードと DLL バージョン識別子を送信します。",
+  "msg.patchesImported": "パッチをインポートしました。",
+  "error.patchUrl": "認証情報・クエリ・フラグメントのない HTTP(S) の配信元 URL を入力してください。",
+  "error.patchImportMode": "このホストでは URL インポートを利用できません。",
+  "error.patchImportUnknown": "インポート結果は不明です。再試行前に一覧を再読み込みしてください。{detail}"
 }

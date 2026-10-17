@@ -49,6 +49,7 @@ const optionDraft = reactive<Record<string, string>>({});
 const optionTouched = reactive<Record<string, boolean>>({});
 const optionDraftState = reactive<OptionDraftState>({ game: '', revision: undefined, values: optionDraft, touched: optionTouched });
 const patchSearch = ref('');
+const patchUrl = ref('');
 const managerDraft = ref<ManagedCard[]>([]);
 const managerActive = ref<[string, string]>(['', '']);
 const managerDirty = ref(false);
@@ -169,6 +170,7 @@ function syncOptionDraft(state = options.value): void {
   optionGame.value = state.game;
 }
 watch(options, state => syncOptionDraft(state));
+watch(patches, (state, previous) => { if (!state) patchUrl.value = ''; else if (!previous) patchUrl.value = state.import_url; });
 watch(cardManager, state => {
   const next = mergeCardManagerDraft({ cards: managerDraft.value, active: managerActive.value, revision: managerBaseRevision.value, dirty: managerDirty.value }, state);
   managerDraft.value = next.cards; managerActive.value = next.active; managerBaseRevision.value = next.revision; managerDirty.value = next.dirty;
@@ -308,7 +310,10 @@ function setPatchInteger(id: string, event: Event): void {
 }
 function ensureIoPolling(): void { if (tab.value === 'io') c.startIoPolling(); else c.stopIoPolling(); }
 watch(tab, ensureIoPolling);
-async function openPatches(): Promise<void> { tab.value = 'patches'; if (!featureReady.value) return; await c.refreshPatches(); }
+async function openPatches(): Promise<void> { tab.value = 'patches'; if (!featureReady.value || busy.value) return; await c.refreshPatches(); }
+async function importPatchUrl(): Promise<void> {
+  if (await c.importPatches(patchUrl.value)) patchUrl.value = patches.value?.import_url ?? patchUrl.value;
+}
 async function openIo(): Promise<void> { tab.value = 'io'; c.startIoPolling(); }
 async function openPreview(): Promise<void> { tab.value = 'preview'; if (connected.value && !demo.value) await c.captureScreen(); }
 function selectTab(key: string): void {
@@ -383,7 +388,13 @@ onBeforeUnmount(() => {
         <div class="page-title"><h1 id="patches-title">{{ t('patches.title') }}</h1><div class="button-row"><button class="quiet compact" :disabled="!!busy || !featureReady" @click="c.reloadPatches">{{ t('patches.reload') }}</button><button class="primary compact" :disabled="!!busy || !featureReady || !patches?.dirty" @click="c.savePatches()">{{ t('patches.save') }}</button></div></div>
         <div v-if="featureErrors.patches" class="empty-state"><h2>{{ t('patches.unavailable') }}</h2><p>{{ featureErrors.patches }}</p><button @click="openPatches">{{ t('patches.retry') }}</button></div>
         <div v-else-if="!patches" class="empty-state"><h2>{{ t('patches.loading') }}</h2><p v-if="connected && !featureReady" class="muted small">{{ t('patches.passwordHint') }}</p><button :disabled="!featureReady || !!busy" @click="openPatches">{{ t('patches.load') }}</button></div>
-        <template v-else><div class="settings-panel feature-toolbar patch-toolbar"><label class="stacked-field">{{ t('patches.search') }}<input v-model="patchSearch" type="search"></label><div class="button-row"><label class="check"><input type="checkbox" :checked="patches.auto_apply" :disabled="!!busy || !featureReady" @change="c.setPatchAutoApply(($event.target as HTMLInputElement).checked)">{{ t('patches.autoApply') }}</label><span class="muted small" v-if="patches.standalone">{{ t('patches.standalone') }}</span></div></div><div v-for="patch in visiblePatches" :key="patch.id" class="settings-panel patch-item"><div class="field-header"><label class="check"><input type="checkbox" :checked="patch.status === 'enabled'" :disabled="patch.status === 'error' || !!busy || !featureReady" @change="c.setPatch(patch.id, { enabled: ($event.target as HTMLInputElement).checked })">{{ patch.name }}</label><span class="muted small">{{ patch.group }}</span><span v-if="patch.unverified" class="caution">{{ t('patches.unverified') }}</span></div><p class="muted small">{{ patch.description }}</p><p v-if="patch.caution" class="caution">{{ patch.caution }}</p><p v-if="patch.error" class="error-text">{{ patch.error }}</p><select v-if="patch.choices.length" :value="patch.selected" :disabled="patch.status !== 'enabled' || patch.unverified || !!busy || !featureReady" @change="c.setPatch(patch.id, { enabled: true, choice: ($event.target as HTMLSelectElement).value })"><option v-for="choice in patch.choices" :key="choice" :value="choice">{{ choice }}</option></select><input v-if="patch.type === 'integer'" type="number" :min="patch.min" :max="patch.max" :value="patch.value ?? ''" :disabled="patch.status !== 'enabled' || patch.unverified || patch.value === undefined || !!busy || !featureReady" @change="setPatchInteger(patch.id, $event)"></div></template>
+        <template v-else>
+          <form class="settings-panel patch-import" @submit.prevent="importPatchUrl">
+            <div class="feature-toolbar"><label class="stacked-field">{{ t('patches.importUrl') }}<input v-model="patchUrl" type="url" list="patch-sources" placeholder="https://patch-server.example/" maxlength="4096" required spellcheck="false" autocomplete="off" autocapitalize="none" :disabled="!patches.can_import || !featureReady || !!busy"></label><datalist id="patch-sources"><option v-for="url in patches.recent_urls" :key="url" :value="url"></option></datalist><button type="submit" :disabled="!patches.can_import || !featureReady || !!busy || !patchUrl.trim()">{{ t(busy === 'patch-import' ? 'patches.importing' : 'patches.import') }}</button></div>
+            <p class="muted small">{{ t(!patches.standalone ? 'patches.importMode' : !patches.can_import ? 'patches.importUnavailable' : 'patches.importHint') }}</p>
+          </form>
+          <p v-if="patches.import_errors" class="caution import-errors">{{ patches.import_errors }}</p>
+          <div class="settings-panel feature-toolbar patch-toolbar"><label class="stacked-field">{{ t('patches.search') }}<input v-model="patchSearch" type="search"></label><div class="button-row"><label class="check"><input type="checkbox" :checked="patches.auto_apply" :disabled="!!busy || !featureReady" @change="c.setPatchAutoApply(($event.target as HTMLInputElement).checked)">{{ t('patches.autoApply') }}</label><span class="muted small" v-if="patches.standalone">{{ t('patches.standalone') }}</span></div></div><div v-for="patch in visiblePatches" :key="patch.id" class="settings-panel patch-item"><div class="field-header"><label class="check"><input type="checkbox" :checked="patch.status === 'enabled'" :disabled="patch.status === 'error' || !!busy || !featureReady" @change="c.setPatch(patch.id, { enabled: ($event.target as HTMLInputElement).checked })">{{ patch.name }}</label><span class="muted small">{{ patch.group }}</span><span v-if="patch.unverified" class="caution">{{ t('patches.unverified') }}</span></div><p class="muted small">{{ patch.description }}</p><p v-if="patch.caution" class="caution">{{ patch.caution }}</p><p v-if="patch.error" class="error-text">{{ patch.error }}</p><select v-if="patch.choices.length" :value="patch.selected" :disabled="patch.status !== 'enabled' || patch.unverified || !!busy || !featureReady" @change="c.setPatch(patch.id, { enabled: true, choice: ($event.target as HTMLSelectElement).value })"><option v-for="choice in patch.choices" :key="choice" :value="choice">{{ choice }}</option></select><input v-if="patch.type === 'integer'" type="number" :min="patch.min" :max="patch.max" :value="patch.value ?? ''" :disabled="patch.status !== 'enabled' || patch.unverified || patch.value === undefined || !!busy || !featureReady" @change="setPatchInteger(patch.id, $event)"></div></template>
       </section>
       <section v-show="tab === 'io'" aria-labelledby="io-title">
         <div class="page-title"><h1 id="io-title">{{ t('io.title') }}</h1><div class="button-row"><button class="quiet compact" :disabled="!!busy || !connected" @click="c.readIo">{{ t('io.refresh') }}</button><button class="quiet compact" :disabled="!!busy || !connected" @click="c.resetIo()">{{ t('io.reset') }}</button></div></div>
@@ -438,8 +449,13 @@ onBeforeUnmount(() => {
         </div>
       </section>
       <section v-show="tab === 'keypad'" aria-labelledby="keypad-title">
-        <div class="page-title"><h1 id="keypad-title">{{ t('nav.keypad') }}</h1><label class="inline-field">{{ t('cards.reader') }}<select v-model.number="unit"><option :value="0">P1</option><option :value="1">P2</option></select></label></div>
-        <div class="settings-panel keypad-panel"><h2>{{ t('cards.keypad') }}</h2><p class="muted small">{{ t('cards.target', { n: unit + 1 }) }}</p><div class="keypad"><button v-for="key in ['1','2','3','4','5','6','7','8','9','A','0','D']" :key="key" :disabled="!connected || !!busy" @click="c.keypad(unit, key)">{{ key === 'A' ? '00' : key === 'D' ? '.' : key }}</button></div></div>
+        <div class="page-title"><h1 id="keypad-title">{{ t('nav.keypad') }}</h1></div>
+        <div class="keypads-layout">
+          <div v-for="reader in [0,1]" :key="reader" class="settings-panel" role="group" :aria-label="'P' + (reader + 1)">
+            <h2>P{{ reader + 1 }}</h2>
+            <div class="keypad"><button v-for="key in ['1','2','3','4','5','6','7','8','9','A','0','D']" :key="key" :disabled="!connected || !!busy" @click="c.keypad(reader, key)">{{ key === 'A' ? '00' : key === 'D' ? '.' : key }}</button></div>
+          </div>
+        </div>
       </section>
       <section v-show="tab === 'preview'" aria-labelledby="preview-title">
         <div class="page-title"><h1 id="preview-title">{{ t('preview.title') }}</h1><div class="button-row"><select v-if="captureScreens.length" :value="selectedCaptureScreen" :aria-label="t('preview.title')" :disabled="capturing || !connected || demo" @change="c.captureScreen(Number(($event.target as HTMLSelectElement).value))"><option v-for="screen in captureScreens" :key="screen" :value="screen">{{ t('preview.screen', { n: screen + 1 }) }}</option></select><button class="quiet compact" :disabled="!connected || demo || capturing" @click="c.captureScreen()">{{ t(capturing ? 'screen.capturing' : 'screen.refreshCapture') }}</button></div></div>

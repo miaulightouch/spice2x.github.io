@@ -60,8 +60,17 @@ int main() {
     patcher::patches_test_fail_on_apply_call = 0;
     patcher::patches_test_apply_calls = 0;
     patcher::patches_test_save_failure = false;
+    patcher::patches_test_import_result = false;
+    patcher::patches_test_import_error.clear();
     patcher::patches_test_reload_count = 0;
     patcher::patches_test_save_count = 0;
+    patcher::patches_test_import_count = 0;
+    patcher::patches_test_events.clear();
+    patcher::patch_url.clear();
+    patcher::url_recents.clear();
+    patcher::url_fetch_errors.clear();
+    avs::game::DLL_NAME = "target.dll";
+    cfg::CONFIGURATOR_STANDALONE = true;
 
     auto memory = make_patch("memory-id", "Memory", patcher::PatchType::Memory);
     memory.patch_number.value = 0x13579bdf;
@@ -77,12 +86,13 @@ int main() {
     patcher::patches = {memory, signature, union_patch, integer};
 
     api::modules::Patches module;
-    for (const auto *function : {"get", "set", "set_auto_apply", "save", "reload"}) {
+    for (const auto *function : {"get", "set", "set_auto_apply", "save", "reload", "import_url"}) {
         auto result = call(module, function, "[null]");
         assert(result["errors"].Size() == 1);
     }
     assert(module.requires_password("get"));
     assert(module.requires_password("set"));
+    assert(module.requires_password("import_url"));
 
     auto result = call(module, "get");
     assert(result["errors"].Empty());
@@ -95,6 +105,10 @@ int main() {
     assert(result["data"][0]["patches"][3]["max"].GetInt() == 10);
     assert(result["data"][0]["patches"][3]["value"].GetInt() == 3);
     assert(!result["data"][0]["patches"][0].HasMember("min"));
+    assert(result["data"][0]["can_import"].GetBool());
+    assert(std::string(result["data"][0]["import_url"].GetString()).empty());
+    assert(std::string(result["data"][0]["import_errors"].GetString()).empty());
+    assert(result["data"][0]["recent_urls"].Empty());
 
     const auto before_invalid = state_json(module);
     for (const auto &params : {
@@ -228,5 +242,112 @@ int main() {
     assert(result["data"][0]["patches"].Size() == 4);
     assert(patcher::patches_test_reload_count == 1);
 
-    std::cout << "Native patches API tests passed: schema, password, validation, selection, apply/save errors, and state persistence.\n";
+    patcher::patch_url = "https://old.example/patches";
+    patcher::url_recents = {patcher::patch_url};
+    patcher::patches_test_import_count = 0;
+    patcher::patches_test_save_count = 0;
+    patcher::patches_test_reload_count = 0;
+    patcher::patches_test_events.clear();
+    const auto before_invalid_import = state_json(module);
+    for (const auto &url : {
+        std::string("ftp://example.com/patches"),
+        std::string("https:///patches"),
+        std::string("https://user@example.com/patches"),
+        std::string("https://example.com/patches?game=1"),
+        std::string("https://example.com/patches#latest"),
+        std::string("https://example.com/patches with-space"),
+        std::string("https://:8080/patches"),
+    }) {
+        result = call(module, "import_url", "[\"" + url + "\"]");
+        assert(result["errors"].Size() == 1);
+        assert(result["data"].Empty());
+        assert(patcher::patches_test_import_count == 0);
+        assert(patcher::patches_test_save_count == 0);
+        assert(patcher::patches_test_reload_count == 0);
+        assert(state_json(module) == before_invalid_import);
+    }
+    const auto long_url = "https://example.com/" + std::string(4096, 'a');
+    result = call(module, "import_url", "[\"" + long_url + "\"]");
+    assert(result["errors"].Size() == 1);
+    assert(result["data"].Empty());
+    assert(patcher::patches_test_import_count == 0);
+    assert(patcher::patches_test_reload_count == 0);
+    assert(state_json(module) == before_invalid_import);
+
+    cfg::CONFIGURATOR_STANDALONE = false;
+    const auto before_mode_rejection = state_json(module);
+    result = call(module, "import_url", R"(["https://example.com/patches"])");
+    assert(result["errors"].Size() == 1);
+    assert(result["data"].Empty());
+    assert(patcher::patches_test_import_count == 0);
+    assert(patcher::patches_test_reload_count == 0);
+    assert(state_json(module) == before_mode_rejection);
+    cfg::CONFIGURATOR_STANDALONE = true;
+
+    avs::game::DLL_NAME.clear();
+    const auto before_dll_rejection = state_json(module);
+    result = call(module, "import_url", R"(["https://example.com/patches"])");
+    assert(result["errors"].Size() == 1);
+    assert(result["data"].Empty());
+    assert(patcher::patches_test_import_count == 0);
+    assert(patcher::patches_test_reload_count == 0);
+    assert(state_json(module) == before_dll_rejection);
+    avs::game::DLL_NAME = "target.dll";
+
+    patcher::patches_test_import_result = true;
+    patcher::patches_test_import_error = "extra.dll: download failed";
+    patcher::url_recent_idx = 0;
+    patcher::patches_test_import_count = 0;
+    patcher::patches_test_save_count = 0;
+    patcher::patches_test_reload_count = 0;
+    patcher::patches_test_events.clear();
+    result = call(module, "import_url", R"(["https://example.com/patches"])");
+    assert(result["errors"].Empty());
+    assert(result["data"].Size() == 1);
+    assert(result["data"][0]["can_import"].GetBool());
+    assert(std::string(result["data"][0]["import_url"].GetString())
+        == "https://example.com/patches");
+    assert(std::string(result["data"][0]["import_errors"].GetString())
+        == "extra.dll: download failed");
+    assert(result["data"][0]["recent_urls"].Size() == 2);
+    assert(patcher::url_recent_idx == static_cast<size_t>(-1));
+    assert(patcher::patches_test_import_count == 1);
+    assert(patcher::patches_test_save_count == 1);
+    assert(patcher::patches_test_reload_count == 1);
+    assert((patcher::patches_test_events == std::vector<std::string>{"import", "save", "reload"}));
+
+    patcher::patches_test_import_result = false;
+    patcher::patches_test_import_error = "download failed";
+    patcher::patches_test_import_count = 0;
+    patcher::patches_test_save_count = 0;
+    patcher::patches_test_reload_count = 0;
+    patcher::patches_test_events.clear();
+    result = call(module, "import_url", R"(["https://failed.example/patches"])");
+    assert(result["errors"].Size() == 1);
+    assert(std::string(result["errors"][0].GetString()) == "Unable to import patches from URL.");
+    assert(patcher::patches_test_import_count == 1);
+    assert(patcher::patches_test_save_count == 0);
+    assert(patcher::patches_test_reload_count == 1);
+    assert((patcher::patches_test_events == std::vector<std::string>{"import", "reload"}));
+    assert(patcher::url_recents.size() == 2);
+
+    patcher::patches_test_import_result = true;
+    patcher::patches_test_import_error.clear();
+    patcher::patches_test_save_failure = true;
+    patcher::patches_test_import_count = 0;
+    patcher::patches_test_save_count = 0;
+    patcher::patches_test_reload_count = 0;
+    patcher::patches_test_events.clear();
+    result = call(module, "import_url", R"(["https://save-fails.example/patches"])");
+    assert(result["errors"].Size() == 1);
+    assert(std::string(result["errors"][0].GetString()).find("imported") != std::string::npos);
+    assert(std::string(result["errors"][0].GetString()).find("save") != std::string::npos);
+    assert(patcher::patches_test_import_count == 1);
+    assert(patcher::patches_test_save_count == 1);
+    assert(patcher::patches_test_reload_count == 1);
+    assert((patcher::patches_test_events == std::vector<std::string>{"import", "save", "reload"}));
+    assert(patcher::url_recents.size() == 3);
+    patcher::patches_test_save_failure = false;
+
+    std::cout << "Native patches API tests passed: schema, password, validation, selection, apply/save errors, URL import, and state persistence.\n";
 }
