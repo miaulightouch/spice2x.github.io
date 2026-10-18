@@ -351,7 +351,7 @@
   "preview.download": "下載影像",
   "preview.stop": "停止",
   "preview.stream": "MJPEG 串流",
-  "preview.fps": "MJPEG FPS",
+  "preview.fps": "FPS 上限",
   "preview.streamUnavailable": "請以 -apistream 啟動 spice2x，才能使用可用的 MJPEG 串流。",
   "preview.streamError": "串流失敗。請檢查 -apistream、網路存取權限與瀏覽器 HTTP 權限，或改為取得截圖。",
   "preview.streamHint": "串流連接埠沒有密碼。每個螢幕只能有一位觀看者。",
@@ -365,5 +365,8 @@
   "error.patchUrl": "請使用不含帳密、查詢參數或 # 的 HTTP(S) 來源網址。",
   "error.patchImportMode": "此主機無法匯入 URL。",
   "error.patchImportUnknown": "匯入結果未知，請重新讀取列表後再重試。{detail}",
-  "cards.randomColor": "隨機顏色"
+  "cards.randomColor": "隨機顏色",
+  "preview.play": "播放",
+  "preview.fullscreen": "全螢幕",
+  "preview.exitFullscreen": "離開全螢幕"
 }

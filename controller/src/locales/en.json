@@ -351,7 +351,7 @@
   "preview.download": "Download image",
   "preview.stop": "Stop",
   "preview.stream": "MJPEG stream",
-  "preview.fps": "MJPEG FPS",
+  "preview.fps": "FPS limit",
   "preview.streamUnavailable": "Start spice2x with -apistream to use an available MJPEG stream.",
   "preview.streamError": "Stream failed. Check -apistream, network access and browser HTTP permissions, or get a screenshot.",
   "preview.streamHint": "The stream port has no password. One viewer per screen.",
@@ -365,5 +365,8 @@
   "error.patchUrl": "Use an HTTP(S) base URL without credentials, query or fragment.",
   "error.patchImportMode": "URL import is unavailable on this host.",
   "error.patchImportUnknown": "Import result unknown. Reload patches before retrying. {detail}",
-  "cards.randomColor": "Random color"
+  "cards.randomColor": "Random color",
+  "preview.play": "Play",
+  "preview.fullscreen": "Fullscreen",
+  "preview.exitFullscreen": "Exit fullscreen"
 }
