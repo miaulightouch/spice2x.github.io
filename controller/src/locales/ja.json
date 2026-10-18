@@ -351,7 +351,7 @@
   "preview.download": "画像をダウンロード",
   "preview.stop": "停止",
   "preview.stream": "MJPEG ストリーム",
-  "preview.fps": "MJPEG FPS",
+  "preview.fps": "FPS 上限",
   "preview.streamUnavailable": "利用可能な MJPEG ストリームを使うには spice2x を -apistream で起動してください。",
   "preview.streamError": "ストリームに失敗しました。-apistream、ネットワークアクセス、ブラウザーの HTTP 権限を確認するか、スクリーンショットを取得してください。",
   "preview.streamHint": "ストリームポートにパスワードはありません。1 画面につき 1 人のみ視聴できます。",
@@ -365,5 +365,8 @@
   "error.patchUrl": "認証情報・クエリ・フラグメントのない HTTP(S) の配信元 URL を入力してください。",
   "error.patchImportMode": "このホストでは URL インポートを利用できません。",
   "error.patchImportUnknown": "インポート結果は不明です。再試行前に一覧を再読み込みしてください。{detail}",
-  "cards.randomColor": "ランダムな色"
+  "cards.randomColor": "ランダムな色",
+  "preview.play": "再生",
+  "preview.fullscreen": "全画面",
+  "preview.exitFullscreen": "全画面を終了"
 }

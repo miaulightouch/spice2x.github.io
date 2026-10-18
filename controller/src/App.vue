@@ -2,6 +2,7 @@
 import { t, msg, locale, languages, setLocale, LocalizedError } from './i18n';
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import IoPanel from './components/IoPanel.vue';
+import CapturePlayer from './components/CapturePlayer.vue';
 import { useController } from './useController';
 import { isRecord, normalizeEndpoint } from './api/client';
 import { EMBEDDED_PROFILE_ID, embeddedWebSocketEndpoint, isEmbeddedBuild, isEmbeddedProfile } from './mode';
@@ -623,11 +624,10 @@ onBeforeUnmount(() => {
           <label class="stacked-field">{{ t('preview.quality') }}<input v-model.number="captureQuality" type="number" min="1" max="100" step="1" :disabled="capturing || !!streamUrl"></label>
           <label class="stacked-field">{{ t('preview.size') }}<select :value="streamUrl ? 1 : captureDivide" :disabled="capturing || !!streamUrl" @change="captureDivide = Number(($event.target as HTMLSelectElement).value)"><option :value="1">{{ t('preview.fullSize') }}</option><option :value="2">1/2</option><option :value="4">1/4</option><option :value="8">1/8</option></select></label>
           <label class="stacked-field">{{ t('preview.fps') }}<input v-model.number="captureFps" type="number" min="1" max="60" step="1" :disabled="!!streamUrl"></label>
-          <button :disabled="!connected || demo || !!busy || capturing" @click="streamUrl ? stopPreview() : startStream()">{{ t(streamUrl ? 'preview.stop' : 'preview.stream') }}</button>
         </div>
         <p class="muted small">{{ t(streamUrl ? 'preview.streamHint' : 'preview.hint') }}</p>
         <p v-if="captureError" class="error-text" role="alert">{{ captureError }}</p>
-        <div class="capture-viewer"><img v-show="streamUrl" :src="streamUrl || undefined" :alt="t('preview.title')" @error="streamFailed"><img v-if="!streamUrl && image" :src="image" :alt="t('screen.capture')"><p v-else-if="!streamUrl" class="muted small">{{ t('preview.empty') }}</p></div>
+        <CapturePlayer :stream-url="streamUrl" :stream-pending="busy === 'stream'" :image="image" :play-disabled="!connected || demo || !!busy || capturing" :active="tab === 'preview' && connected" @play="startStream" @stop="stopPreview" @error="streamFailed" />
         <p v-if="captureFrame && !streamUrl" class="muted small numeric">{{ captureFrame.width }} × {{ captureFrame.height }} · {{ imageTime }}</p>
       </section>
       <section v-show="tab === 'connection'" aria-labelledby="system-title">

@@ -351,7 +351,7 @@
   "preview.download": "下载图像",
   "preview.stop": "停止",
   "preview.stream": "MJPEG 流",
-  "preview.fps": "MJPEG FPS",
+  "preview.fps": "FPS 上限",
   "preview.streamUnavailable": "请使用 -apistream 启动 spice2x，才能使用可用的 MJPEG 流。",
   "preview.streamError": "流失败。请检查 -apistream、网络访问和浏览器 HTTP 权限，或改为获取截图。",
   "preview.streamHint": "流端口没有密码。每个屏幕只能有一位观看者。",
@@ -365,5 +365,8 @@
   "error.patchUrl": "请使用不含账号密码、查询参数或 # 的 HTTP(S) 来源网址。",
   "error.patchImportMode": "此主机无法导入 URL。",
   "error.patchImportUnknown": "导入结果未知，请重新读取列表后再重试。{detail}",
-  "cards.randomColor": "随机颜色"
+  "cards.randomColor": "随机颜色",
+  "preview.play": "播放",
+  "preview.fullscreen": "全屏",
+  "preview.exitFullscreen": "退出全屏"
 }
