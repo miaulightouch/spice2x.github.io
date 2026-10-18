@@ -4,6 +4,7 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import IoPanel from './components/IoPanel.vue';
 import { useController } from './useController';
 import { isRecord, normalizeEndpoint } from './api/client';
+import { EMBEDDED_PROFILE_ID, embeddedWebSocketEndpoint, isEmbeddedBuild, isEmbeddedProfile } from './mode';
 import { defaultScene } from './api/resize';
 import type { ResizePatch } from './api/resize';
 import { loadCards, loadProfiles, normalizeCard, saveCards, saveProfiles } from './storage';
@@ -38,12 +39,14 @@ async function downloadLog(): Promise<void> {
   document.body.appendChild(link); link.click(); link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-const profiles = ref(loadProfiles());
-const selectedId = ref(profiles.value[0]?.id ?? '');
+const embedded = isEmbeddedBuild;
+const storedProfiles = ref(loadProfiles());
+const profiles = ref(embedded ? storedProfiles.value.filter(profile => isEmbeddedProfile(profile)) : storedProfiles.value);
+const selectedId = ref(embedded ? EMBEDDED_PROFILE_ID : profiles.value[0]?.id ?? '');
 const selected = computed(() => profiles.value.find(p => p.id === selectedId.value));
-const draft = reactive<Profile>({ id: newId(), name: '', endpoint: '', password: '', rememberPassword: false, ...selected.value });
-const tab = ref(profiles.value.length ? 'resize' : 'connection');
-const buildVersion = import.meta.env.VITE_BUILD_VERSION;
+const draft = reactive<Profile>({ id: embedded ? EMBEDDED_PROFILE_ID : newId(), name: '', endpoint: '', password: '', rememberPassword: false, ...selected.value, ...(embedded ? { id: EMBEDDED_PROFILE_ID, endpoint: embeddedWebSocketEndpoint() ?? '' } : {}) });
+const tab = ref(embedded ? 'connection' : profiles.value.length ? 'resize' : 'connection');
+const buildVersion = typeof import.meta.env === 'undefined' ? '' : import.meta.env.VITE_BUILD_VERSION;
 const step = ref(1);
 const cards = ref(loadCards());
 const cardNumber = ref('');
@@ -74,9 +77,6 @@ const showGrid = ref(true);
 const captureQuality = ref(65);
 const captureDivide = ref(2);
 const captureFps = ref(30);
-const captureLive = ref(false);
-let captureTimer: ReturnType<typeof setTimeout> | undefined;
-let captureLoop = 0;
 const offline = ref(!navigator.onLine);
 const modeLabel = computed(() => demo.value ? t('status.demo') : ({ disconnected: t('status.disconnected'), connecting: t('status.connecting'), connected: t('status.connected'), error: t('status.error') })[status.value]);
 const scalePercent = (axis: 'x' | 'y') => Math.round(currentScene.value[axis === 'x' ? 'scale_x' : 'scale_y'] * 1000) / 10;
@@ -105,7 +105,7 @@ function formatBytes(value: number): string {
 }
 
 function persistProfiles(): boolean {
-  try { saveProfiles(profiles.value); return true; }
+  try { saveProfiles(storedProfiles.value); return true; }
   catch { c.report(new LocalizedError('error.storage')); return false; }
 }
 function changeProfile(event: Event): void {
@@ -120,11 +120,14 @@ function changeProfile(event: Event): void {
 }
 function applyProfile(persist = true): boolean {
   try {
-    const endpoint = normalizeEndpoint(draft.endpoint);
+    const endpoint = embedded ? embeddedWebSocketEndpoint() : normalizeEndpoint(draft.endpoint);
+    if (!endpoint) throw new LocalizedError('error.endpoint');
     if (!draft.name.trim()) throw new LocalizedError('error.name');
-    const saved = { ...draft, endpoint, name: draft.name.trim() };
-    const index = profiles.value.findIndex(p => p.id === selectedId.value);
-    if (index < 0) profiles.value.push(saved); else profiles.value[index] = saved;
+    const saved = { ...draft, id: embedded ? EMBEDDED_PROFILE_ID : draft.id, endpoint, name: draft.name.trim() };
+    const index = storedProfiles.value.findIndex(p => p.id === saved.id);
+    if (index < 0) storedProfiles.value.push(saved); else storedProfiles.value[index] = saved;
+    if (embedded) profiles.value = storedProfiles.value.filter(profile => isEmbeddedProfile(profile));
+    else profiles.value = storedProfiles.value;
     selectedId.value = saved.id; Object.assign(draft, saved);
     return persist ? persistProfiles() : true;
   } catch (value) { c.report(value); return false; }
@@ -370,28 +373,18 @@ async function importPatchUrl(): Promise<void> {
   if (await c.importPatches(patchUrl.value)) patchUrl.value = patches.value?.import_url ?? patchUrl.value;
 }
 async function openIo(): Promise<void> { tab.value = 'io'; c.startIoPolling(); }
-async function openPreview(): Promise<void> { tab.value = 'preview'; if (connected.value && !demo.value) await c.captureScreen(); }
-async function refreshCapture(): Promise<void> { c.stopStream(); await c.captureScreen(selectedCaptureScreen.value, captureQuality.value, captureDivide.value); }
-function stopPreview(): void { ++captureLoop; clearTimeout(captureTimer); captureTimer = undefined; captureLive.value = false; c.stopStream(); }
-function toggleLiveCapture(): void {
-  if (captureLive.value) { stopPreview(); return; }
-  stopPreview(); captureLive.value = true;
-  const token = captureLoop;
-  const tick = async (): Promise<void> => {
-    if (token !== captureLoop || !connected.value || document.hidden || tab.value !== 'preview') return;
-    await refreshCapture();
-    if (token !== captureLoop) return;
-    if (captureError.value) { stopPreview(); return; }
-    captureTimer = setTimeout(() => { void tick(); }, 500);
-  };
-  void tick();
+async function openPreview(): Promise<void> {
+  tab.value = 'preview';
+  if (connected.value && !demo.value && !captureScreens.value.length) await c.readCaptureScreens();
 }
+async function refreshCapture(): Promise<void> { await c.captureScreen(selectedCaptureScreen.value, captureQuality.value, captureDivide.value); }
+function stopPreview(): void { c.stopStream(); }
 async function startStream(): Promise<void> { stopPreview(); await c.startStream(captureQuality.value, captureFps.value); }
 function streamFailed(event: Event): void {
   if (!streamUrl.value || (event.currentTarget as HTMLImageElement).currentSrc !== streamUrl.value) return;
   c.stopStream(); c.report(new LocalizedError('preview.streamError'));
 }
-function changeCaptureScreen(event: Event): void { stopPreview(); selectedCaptureScreen.value = Number((event.target as HTMLSelectElement).value); void refreshCapture(); }
+function changeCaptureScreen(event: Event): void { selectedCaptureScreen.value = Number((event.target as HTMLSelectElement).value); }
 watch([tab, connected], () => { if (tab.value !== 'preview' || !connected.value) stopPreview(); if (tab.value !== 'log' || !connected.value) c.stopLogPolling(); });
 function selectTab(key: string): void {
   if (key === 'settings') { void openOptions(); return; }
@@ -409,7 +402,7 @@ const systemActions = computed(() => [
 function confirmSystem(command: 'restart' | 'exit' | 'reboot' | 'shutdown'): void {
   const item = systemActions.value.find(item => item.command === command)!;
   const warning = unsaved.value ? '\n' + t('action.unsaved') : '';
-  const machine = profiles.value.find(item => item.id === selectedId.value)?.name ?? t('msg.cabinet');
+  const machine = embedded ? (draft.name || t('msg.cabinet')) : profiles.value.find(item => item.id === selectedId.value)?.name ?? t('msg.cabinet');
   const prompt = t('action.confirm', { machine, action: item.label, detail: item.detail });
   if (window.confirm((demo.value ? t('action.demoPrefix') : '') + prompt + warning)) void c.machineControl(command);
 }
@@ -431,16 +424,19 @@ onBeforeUnmount(() => {
 <template>
   <div class="controller-app">
     <header class="app-header">
-      <a class="brand" href="#" @click.prevent="tab = profiles.length ? 'resize' : 'connection'" :aria-label="t('app.home')">
+      <a class="brand" href="#" @click.prevent="tab = embedded ? 'connection' : profiles.length ? 'resize' : 'connection'" :aria-label="t('app.home')">
         <span class="brand-mark" aria-hidden="true"><i v-for="n in 4" :key="n"></i></span>
         <strong>{{ t('app.title') }}</strong>
       </a>
       <div class="machine-controls">
-        <label class="sr-only" for="machine">{{ t('connection.select') }}</label>
-        <select id="machine" :value="selectedId" :disabled="!profiles.length || !!busy || status === 'connecting'" @change="changeProfile"><option v-if="!selected" value="" disabled>{{ t(profiles.length ? 'connection.newProfile' : 'connection.noProfiles') }}</option><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option><option v-if="profiles.length" value="manage" data-manage>{{ t('connection.manage') }}</option></select>
+        <button v-if="embedded" class="quiet compact" type="button" @click="tab = 'connection'">{{ draft.name || t('connection.settings') }}</button>
+        <template v-else>
+          <label class="sr-only" for="machine">{{ t('connection.select') }}</label>
+          <select id="machine" :value="selectedId" :disabled="!profiles.length || !!busy || status === 'connecting'" @change="changeProfile"><option v-if="!selected" value="" disabled>{{ t(profiles.length ? 'connection.newProfile' : 'connection.noProfiles') }}</option><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option><option v-if="profiles.length" value="manage" data-manage>{{ t('connection.manage') }}</option></select>
+        </template>
         <button v-if="connected || status === 'connecting'" class="quiet compact" :disabled="!!busy" @click="c.disconnect(); c.notify(msg('msg.disconnected'))">{{ t('connection.disconnect') }}</button>
         <button v-else-if="selected" class="primary compact" :disabled="!!busy" @click="connect">{{ t('connection.connect') }}</button>
-        <button v-else class="primary compact" @click="tab = 'connection'">{{ t('connection.manage') }}</button>
+        <button v-else-if="!embedded" class="primary compact" @click="tab = 'connection'">{{ t('connection.manage') }}</button>
         <span class="connection-chip" :data-status="demo ? 'demo' : status"><i aria-hidden="true"></i>{{ modeLabel }}</span>
       </div>
       <span class="header-spacer" aria-hidden="true"></span>
@@ -563,7 +559,7 @@ onBeforeUnmount(() => {
             <div class="offset-inputs"><label>{{ t('screen.offsetX') }}<input type="number" min="-32768" max="32767" step="1" :value="currentScene.offset_x" :disabled="controlsDisabled" @change="inputOffset('offset_x', $event)"></label><label>{{ t('screen.offsetY') }}<input type="number" min="-32768" max="32767" step="1" :value="currentScene.offset_y" :disabled="controlsDisabled" @change="inputOffset('offset_y', $event)"></label></div>
             <details class="preview-panel"><summary>{{ t(!showGrid && image ? 'screen.capture' : 'screen.grid') }}</summary>
               <div class="screen-preview" :class="{ 'is-capture': !showGrid && image }"><template v-if="showGrid || !image"><div class="target-frame" aria-hidden="true"></div><div class="calibration-board" :style="boardStyle" role="img" :aria-label="t('screen.gridAlt')"><div v-for="n in 16" :key="n">{{ String(n).padStart(2, '0') }}</div></div><span class="preview-caption">{{ t('screen.previewHint') }}</span></template><img v-else :src="image" :alt="t('screen.capture')"></div>
-              <div class="preview-toolbar"><button class="quiet compact" :disabled="capturing || demo" @click="capture">{{ t(capturing ? 'screen.capturing' : 'screen.refreshCapture') }}</button><button v-if="image" class="text-button" @click="showGrid = !showGrid">{{ t(showGrid ? 'screen.showCapture' : 'screen.showGrid') }}</button><span class="muted small" v-if="imageTime">{{ imageTime }} · {{ t('screen.still') }}</span></div>
+              <div class="preview-toolbar"><button class="quiet compact" :disabled="capturing || demo || !!streamUrl || busy === 'stream'" @click="capture">{{ t(capturing ? 'screen.capturing' : 'screen.refreshCapture') }}</button><button v-if="image" class="text-button" @click="showGrid = !showGrid">{{ t(showGrid ? 'screen.showCapture' : 'screen.showGrid') }}</button><span class="muted small" v-if="imageTime">{{ imageTime }} · {{ t('screen.still') }}</span></div>
             </details>
             <button class="text-button read-action" :disabled="controlsDisabled" @click="c.readResize()">{{ t('screen.reload') }}</button>
             <details class="usage-notes"><summary>{{ t('app.details') }}</summary><p>{{ t('screen.saveHint') }}</p><p>{{ t('screen.backendHint') }}</p></details>
@@ -622,22 +618,21 @@ onBeforeUnmount(() => {
         <p v-if="!readers.length" class="empty-state">{{ t('keypad.unavailable') }}</p>
       </section>
       <section v-show="tab === 'preview'" aria-labelledby="preview-title">
-        <div class="page-title"><h1 id="preview-title">{{ t('preview.title') }}</h1><div class="button-row"><select v-if="captureScreens.length" :value="selectedCaptureScreen" :aria-label="t('preview.title')" :disabled="capturing || !connected || demo" @change="changeCaptureScreen"><option v-for="screen in captureScreens" :key="screen" :value="screen">{{ t('preview.screen', { n: screen + 1 }) }}</option></select><button class="quiet compact" :disabled="!connected || demo || capturing || captureLive" @click="refreshCapture">{{ t(capturing ? 'screen.capturing' : 'screen.refreshCapture') }}</button><a v-if="image && !streamUrl" class="button compact" :href="image" download="spice2x-capture.jpg">{{ t('preview.download') }}</a></div></div>
+        <div class="page-title"><h1 id="preview-title">{{ t('preview.title') }}</h1><div class="button-row"><select v-if="captureScreens.length" :value="selectedCaptureScreen" :aria-label="t('preview.title')" :disabled="capturing || !connected || demo || !!streamUrl || busy === 'stream'" @change="changeCaptureScreen"><option v-for="screen in captureScreens" :key="screen" :value="screen">{{ t('preview.screen', { n: screen + 1 }) }}</option></select><button class="quiet compact" :disabled="!connected || demo || capturing || !!streamUrl || !!busy" @click="refreshCapture">{{ t(capturing ? 'screen.capturing' : 'screen.refreshCapture') }}</button><a v-if="image && !streamUrl" class="button compact" :href="image" download="spice2x-capture.jpg">{{ t('preview.download') }}</a></div></div>
         <div class="settings-panel feature-toolbar">
-          <label class="stacked-field">{{ t('preview.quality') }}<input v-model.number="captureQuality" type="number" min="1" max="100" step="1" :disabled="capturing || captureLive || !!streamUrl"></label>
-          <label class="stacked-field">{{ t('preview.size') }}<select :value="streamUrl ? 1 : captureDivide" :disabled="capturing || captureLive || !!streamUrl" @change="captureDivide = Number(($event.target as HTMLSelectElement).value)"><option :value="1">{{ t('preview.fullSize') }}</option><option :value="2">1/2</option><option :value="4">1/4</option><option :value="8">1/8</option></select></label>
+          <label class="stacked-field">{{ t('preview.quality') }}<input v-model.number="captureQuality" type="number" min="1" max="100" step="1" :disabled="capturing || !!streamUrl"></label>
+          <label class="stacked-field">{{ t('preview.size') }}<select :value="streamUrl ? 1 : captureDivide" :disabled="capturing || !!streamUrl" @change="captureDivide = Number(($event.target as HTMLSelectElement).value)"><option :value="1">{{ t('preview.fullSize') }}</option><option :value="2">1/2</option><option :value="4">1/4</option><option :value="8">1/8</option></select></label>
           <label class="stacked-field">{{ t('preview.fps') }}<input v-model.number="captureFps" type="number" min="1" max="60" step="1" :disabled="!!streamUrl"></label>
-          <button :disabled="!connected || demo || (capturing && !captureLive)" @click="toggleLiveCapture">{{ t(captureLive ? 'preview.stop' : 'preview.live') }}</button>
           <button :disabled="!connected || demo || !!busy || capturing" @click="streamUrl ? stopPreview() : startStream()">{{ t(streamUrl ? 'preview.stop' : 'preview.stream') }}</button>
         </div>
-        <p class="muted small">{{ t(streamUrl ? 'preview.streamHint' : captureLive ? 'preview.apiLiveHint' : 'preview.hint') }}</p>
+        <p class="muted small">{{ t(streamUrl ? 'preview.streamHint' : 'preview.hint') }}</p>
         <p v-if="captureError" class="error-text" role="alert">{{ captureError }}</p>
         <div class="capture-viewer"><img v-show="streamUrl" :src="streamUrl || undefined" :alt="t('preview.title')" @error="streamFailed"><img v-if="!streamUrl && image" :src="image" :alt="t('screen.capture')"><p v-else-if="!streamUrl" class="muted small">{{ t('preview.empty') }}</p></div>
         <p v-if="captureFrame && !streamUrl" class="muted small numeric">{{ captureFrame.width }} × {{ captureFrame.height }} · {{ imageTime }}</p>
       </section>
       <section v-show="tab === 'connection'" aria-labelledby="system-title">
-        <div class="page-title"><h1 id="system-title">{{ t('connection.settings') }}</h1><button class="quiet compact" :disabled="!!busy || status === 'connecting'" @click="addProfile">{{ t('connection.add') }}</button></div>
-        <div class="connection-layout"><form class="settings-panel" @submit.prevent="connect"><fieldset :disabled="!!busy || status === 'connecting'"><label class="stacked-field">{{ t('connection.name') }}<input v-model="draft.name" maxlength="60" required autocomplete="off"></label><label class="stacked-field">{{ t('connection.endpoint') }}<input v-model="draft.endpoint" placeholder="ws://192.168.1.10:1338" type="url" required spellcheck="false" autocomplete="off" autocapitalize="none"></label><p class="muted small">{{ t('connection.portHint') }}</p><label class="stacked-field">{{ t('connection.password') }}<input v-model="draft.password" type="password" autocomplete="off" :placeholder="t('connection.passwordPlaceholder')"></label><label class="check"><input v-model="draft.rememberPassword" type="checkbox">{{ t('connection.remember') }}</label><p class="muted small" v-if="draft.rememberPassword">{{ t('connection.rememberHint') }}</p><div class="panel-actions"><button type="button" @click="saveProfile">{{ t('connection.save') }}</button><button class="primary" type="submit">{{ t(status === 'connecting' ? 'status.connecting' : 'connection.connect') }}</button></div></fieldset></form>
+        <div class="page-title"><h1 id="system-title">{{ t('connection.settings') }}</h1><button v-if="!embedded" class="quiet compact" :disabled="!!busy || status === 'connecting'" @click="addProfile">{{ t('connection.add') }}</button></div>
+        <div class="connection-layout"><form class="settings-panel" @submit.prevent="connect"><fieldset :disabled="!!busy || status === 'connecting'"><label class="stacked-field">{{ t('connection.name') }}<input v-model="draft.name" maxlength="60" required autocomplete="off"></label><template v-if="!embedded"><label class="stacked-field">{{ t('connection.endpoint') }}<input v-model="draft.endpoint" placeholder="ws://192.168.1.10:1338" type="url" required spellcheck="false" autocomplete="off" autocapitalize="none"></label><p class="muted small">{{ t('connection.portHint') }}</p></template><label class="stacked-field">{{ t('connection.password') }}<input v-model="draft.password" type="password" autocomplete="off" :placeholder="t('connection.passwordPlaceholder')"></label><label class="check"><input v-model="draft.rememberPassword" type="checkbox">{{ t('connection.remember') }}</label><p class="muted small" v-if="draft.rememberPassword">{{ t('connection.rememberHint') }}</p><div class="panel-actions"><button type="button" @click="saveProfile">{{ t('connection.save') }}</button><button class="primary" type="submit">{{ t(status === 'connecting' ? 'status.connecting' : 'connection.connect') }}</button></div></fieldset></form>
           <aside class="connection-help"><details open><summary>{{ t('connection.first') }}</summary><ol><li>{{ t('connection.help1') }}</li><li>{{ t('connection.help2') }}</li><li>{{ t('connection.help3') }}</li></ol><p>{{ t('connection.browserHint') }}</p><p class="small muted">{{ t('connection.directHint') }}</p></details><button :disabled="!!busy || status === 'connecting'" @click="c.startDemo(); tab = 'resize'; showGrid = true">{{ t('screen.tryDemo') }}</button></aside>
         </div>
       </section>

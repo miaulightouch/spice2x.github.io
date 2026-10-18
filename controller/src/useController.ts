@@ -336,7 +336,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
 
   async function captureScreen(screen?: number, quality = 65, divide = 2): Promise<void> {
     if (demo.value) { notify(msg('msg.gridOnly')); return; }
-    if (!connected.value || capturing.value || !activeProfile) return;
+    if (!connected.value || capturing.value || captureClient || streamUrl.value || busy.value === 'stream' || !activeProfile) return;
     const epoch = generation;
     capturing.value = true; error.value = ''; captureError.value = '';
     const next = new SpiceClient(15000); captureClient = next;
@@ -358,6 +358,29 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
       image.value = 'data:image/jpeg;base64,' + frame.jpeg;
       imageTime.value = new Date().toLocaleTimeString(locale.value, { hour12: false });
       notify(msg('msg.captureUpdated'));
+    } catch (value) {
+      if (epoch === generation) {
+        const failure = value instanceof ApiError ? new LocalizedError('error.capture', { detail: value.message }) : value;
+        captureError.value = errorText(failure); report(failure);
+      }
+    } finally {
+      next.disconnect();
+      if (captureClient === next) captureClient = undefined;
+      if (epoch === generation) capturing.value = false;
+    }
+  }
+
+  async function readCaptureScreens(): Promise<void> {
+    if (demo.value || !connected.value || capturing.value || captureClient || busy.value === 'stream' || !activeProfile) return;
+    const epoch = generation;
+    capturing.value = true; error.value = ''; captureError.value = '';
+    const next = new SpiceClient(15000); captureClient = next;
+    try {
+      await next.connect(activeProfile.endpoint, activeProfile.password);
+      const screens = await fetchCaptureScreens(next);
+      if (epoch !== generation) return;
+      captureScreens.value = screens;
+      if (selectedCaptureScreen.value === undefined || !screens.includes(selectedCaptureScreen.value)) selectedCaptureScreen.value = screens[0];
     } catch (value) {
       if (epoch === generation) {
         const failure = value instanceof ApiError ? new LocalizedError('error.capture', { detail: value.message }) : value;
@@ -433,6 +456,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
   }
 
   async function startStream(quality = 65, fps = 30): Promise<void> {
+    if (capturing.value || streamUrl.value) return;
     await action('stream', async () => {
       if (!activeProfile) throw new LocalizedError('error.demoCapture');
       const request = featureRpc('streams');
@@ -440,6 +464,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
         const value = parseCaptureStreams(await request.rpc.request('capture', 'get_streams'));
         if (!featureRequestCurrent(request)) return;
         streams.value = value;
+        if (value) captureScreens.value = value.screens.map(screen => screen.screen);
         const screen = selectedCaptureScreen.value ?? value?.screens[0]?.screen;
         if (!value || screen === undefined) throw new LocalizedError('preview.streamUnavailable');
         streamUrl.value = mjpegUrl(activeProfile.endpoint, value, screen, quality, fps);
@@ -755,7 +780,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     configuredPassword, connected,
     connect, startDemo, disconnect, notify, report, updateResize, selectScene, readResize, saveResize,
     machineControl, pulse, exactButton, releaseButtons, insertCoin, insertCard, getMachineCards, keypad, capture,
-    captureScreen, streams, streamUrl, startStream, stopStream,
+    captureScreen, readCaptureScreens, streams, streamUrl, startStream, stopStream,
     keypadCapabilities, refreshKeypadCapabilities, insertKeypadCard, loadAndInsertCard, avsInfo, launcherInfo,
     logText, logSize, readLog, downloadLog, readStatus, logPolling, startLogPolling, stopLogPolling,
     games, options, patches, cardManager, ioButtons, ioAnalogs, ioLights, featureErrors,

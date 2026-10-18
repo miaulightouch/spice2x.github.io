@@ -150,6 +150,17 @@ test('controller lists screens, captures the selected one and drops a stale fram
   }
 });
 
+test('screen metadata can be loaded without taking a screenshot', async () => {
+  const server = await captureServer(), controller = useController();
+  try {
+    await controller.connect({ id: 'metadata', name: 'Metadata', endpoint: server.endpoint, password: '', rememberPassword: false });
+    await controller.readCaptureScreens();
+    assert.deepEqual(controller.captureScreens.value, [1, 0]);
+    assert.equal(server.requests.some(request => request.function === 'get_jpg'), false);
+    assert.equal(controller.captureFrame.value, undefined);
+  } finally { controller.disconnect(); await server.close(); }
+});
+
 test('stopping a stream invalidates late success and failure responses on the real encrypted client', async () => {
   const server = await captureServer(), controller = useController();
   try {
@@ -161,5 +172,54 @@ test('stopping a stream invalidates late success and failure responses on the re
       assert.equal(controller.streamUrl.value, '');
       assert.equal(controller.error.value, '');
     }
+  } finally { controller.disconnect(); await server.close(); }
+});
+
+test('manual capture is ignored during playback and works again after stopping', async () => {
+  const server = await captureServer(), controller = useController();
+  try {
+    await controller.connect({ id: 'stream-capture', name: 'Stream', endpoint: server.endpoint, password: '', rememberPassword: false });
+    await controller.startStream();
+    assert.ok(controller.streamUrl.value);
+    const before = server.requests.filter(request => request.function === 'get_jpg').length;
+    await controller.captureScreen();
+    assert.equal(server.requests.filter(request => request.function === 'get_jpg').length, before);
+    assert.equal(controller.capturing.value, false);
+    controller.stopStream();
+    assert.equal(controller.streamUrl.value, '');
+    await controller.captureScreen(controller.selectedCaptureScreen.value);
+    assert.equal(server.requests.filter(request => request.function === 'get_jpg').length, before + 1);
+    assert.ok(controller.captureFrame.value);
+  } finally { controller.disconnect(); await server.close(); }
+});
+
+test('pending stream startup blocks capture until its stream URL exists', async () => {
+  const server = await captureServer(), controller = useController();
+  try {
+    await controller.connect({ id: 'pending-stream', name: 'Stream', endpoint: server.endpoint, password: '', rememberPassword: false });
+    const seen = server.holdNextStreams();
+    const pending = controller.startStream();
+    await seen;
+    await controller.captureScreen();
+    assert.equal(server.requests.filter(request => request.function === 'get_jpg').length, 0);
+    server.releaseStreams();
+    await pending;
+    assert.ok(controller.streamUrl.value);
+  } finally { controller.disconnect(); await server.close(); }
+});
+
+test('pending capture blocks stream startup', async () => {
+  const server = await captureServer(), controller = useController();
+  try {
+    await controller.connect({ id: 'pending-capture', name: 'Capture', endpoint: server.endpoint, password: '', rememberPassword: false });
+    const seen = server.holdNextFrame();
+    const pending = controller.captureScreen(1);
+    await seen;
+    await controller.startStream();
+    assert.equal(server.requests.filter(request => request.function === 'get_streams').length, 0);
+    assert.equal(controller.streamUrl.value, '');
+    server.release();
+    await pending;
+    assert.ok(controller.captureFrame.value);
   } finally { controller.disconnect(); await server.close(); }
 });

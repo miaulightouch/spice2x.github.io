@@ -3,7 +3,7 @@
 set -eu
 
 docker build --pull "$PWD/external/docker" -t spicetools/deps --platform linux/x86_64
-docker build --build-context gitroot="$PWD/../../.git" . -t spicetools/spice:latest
+docker build --build-context gitroot="$PWD/../../.git" --build-context controller="$PWD/../../controller" . -t spicetools/spice:latest
 
 # Interactive TTY if available, so docker build can be Ctrl+C'd
 DOCKER_FLAGS=""

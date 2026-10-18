@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
@@ -14,12 +14,14 @@ const buildCommit = execFileSync('git', ['rev-parse', '--short=7', 'HEAD'], {
 
 export function offlinePlugin(): Plugin {
   let publicDir: string | false = false;
+  let embedded = false;
   return {
     name: 'arcade-room-offline',
     apply: 'build',
     enforce: 'post',
-    configResolved(config) { publicDir = config.publicDir; },
+    configResolved(config) { publicDir = config.publicDir; embedded = config.mode === 'embedded'; },
     generateBundle(_, bundle) {
+      if (embedded) return;
       const files = [...new Set([
         'index.html', ...precachePublicFiles, ...Object.keys(bundle).filter(k => !k.endsWith('.map')),
       ])].sort();
@@ -53,10 +55,81 @@ self.addEventListener('fetch', event => {
   };
 }
 
+function escapeHtml(source: string) {
+  return source.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+
+function inlineReference(bundle: Record<string, { type: string; code?: string; source?: string | Uint8Array }>, reference: string) {
+  const fileName = decodeURIComponent(reference).replace(/^\.\//, '').replace(/^\//, '');
+  const output = bundle[fileName];
+  if (!output) throw new Error(`embedded build is missing ${fileName}`);
+  return output.type === 'chunk' ? output.code ?? '' : String(output.source ?? '');
+}
+
+export function embeddedPlugin(): Plugin {
+  let embedded = false;
+  let publicDir = '';
+  return {
+    name: 'arcade-room-embedded',
+    apply: 'build',
+    enforce: 'post',
+    config(_, env) {
+      if (env.mode !== 'embedded') return;
+      return {
+        build: {
+          outDir: 'dist/embedded',
+          emptyOutDir: true,
+          assetsInlineLimit: Number.MAX_SAFE_INTEGER,
+          cssCodeSplit: false,
+          rollupOptions: { output: { inlineDynamicImports: true } },
+        },
+        publicDir: false,
+      };
+    },
+    configResolved(config) {
+      embedded = config.mode === 'embedded';
+      publicDir = join(config.root, 'public');
+    },
+    generateBundle(_, bundle) {
+      if (!embedded) return;
+      const html = bundle['index.html'];
+      if (!html || html.type !== 'asset') throw new Error('embedded build did not produce index.html');
+      let source = String(html.source);
+      source = source.replace(/<script\b([^>]*?)\bsrc=(['"])([^'"]+)\2([^>]*)><\/script>/gi,
+        (tag, before: string, _quote: string, reference: string, after: string) => {
+          if (!/\btype=(['"])module\1/i.test(`${before}${after}`)) return tag;
+          const code = inlineReference(bundle, reference).replace(/<\/script/gi, '<\\/script');
+          return `<script${before}${after}>${code}</script>`;
+        });
+      source = source.replace(/<link\b(?=[^>]*\brel=(['"])[^'"]*stylesheet[^'"]*\1)[^>]*\bhref=(['"])([^'"]+)\2[^>]*>/gi,
+        (_tag, _relQuote: string, _hrefQuote: string, reference: string) => {
+          const css = inlineReference(bundle, reference).replace(/<\/style/gi, '<\\/style');
+          return `<style>${css}</style>`;
+        });
+      source = source.replace(/<link\b(?=[^>]*\brel=(['"])manifest\1)[^>]*>/gi, '');
+      const icon = join(publicDir, 'icon.svg');
+      if (!existsSync(icon)) throw new Error('embedded build requires public/icon.svg');
+      const iconData = `data:image/svg+xml,${encodeURIComponent(readFileSync(icon, 'utf8'))}`;
+      source = source.replace(/<link\b(?=[^>]*\brel=(['"])icon\1)[^>]*>/i,
+        `<link rel="icon" type="image/svg+xml" href="${iconData}">`);
+      const notices = ['LICENSE.txt', 'THIRD_PARTY_NOTICES.txt']
+        .filter(file => existsSync(join(publicDir, file)))
+        .map(file => `<template data-embedded-notice="${file}">${escapeHtml(readFileSync(join(publicDir, file), 'utf8'))}</template>`)
+        .join('');
+      source = source.replace(/<\/body>/i, `${notices}</body>`);
+      if (/\b(?:src|href)=(['"])(?!data:|#)[^'"]+\1/i.test(source)) {
+        throw new Error('embedded build still contains an external asset reference');
+      }
+      html.source = source;
+      for (const fileName of Object.keys(bundle)) if (fileName !== 'index.html') delete bundle[fileName];
+    },
+  };
+}
+
 export default defineConfig({
   base: './',
   define: {
     'import.meta.env.VITE_BUILD_VERSION': JSON.stringify(`${buildDate}-${buildCommit}`),
   },
-  plugins: [vue(), offlinePlugin()],
+  plugins: [vue(), offlinePlugin(), embeddedPlugin()],
 });
