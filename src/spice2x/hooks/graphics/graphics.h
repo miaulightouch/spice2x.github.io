@@ -148,6 +148,11 @@ inline constexpr size_t GRAPHICS_CAPTURE_SCREEN_NO = 4;
 
 void graphics_capture_trigger(int screen);
 bool graphics_capture_consume(int *screen);
+bool graphics_capture_consume_request(int *screen, uint64_t *request_id);
+bool graphics_capture_request_active(int screen, uint64_t request_id);
+bool graphics_capture_enqueue_request(int screen, uint64_t request_id,
+        std::shared_ptr<uint8_t[]> data, size_t width, size_t height);
+bool graphics_capture_skip_request(int screen, uint64_t request_id);
 void graphics_capture_enqueue(int screen, uint8_t *data, size_t width, size_t height);
 void graphics_capture_enqueue(int screen, std::shared_ptr<uint8_t[]> data, size_t width, size_t height);
 void graphics_capture_skip(int screen);
