@@ -21,6 +21,15 @@
 #include "util/threadpool.h"
 #endif
 
+#ifdef SPICE_OPENGL_PROBE
+#include "opengl_probe.h"
+#include "opengl_probe_metrics.h"
+#include <array>
+#include <chrono>
+#include "external/rapidjson/stringbuffer.h"
+#include "external/rapidjson/writer.h"
+#endif
+
 namespace {
     graphics::opengl::GlApi gl;
     decltype(wglGetCurrentContext) *get_context = nullptr;
@@ -34,6 +43,142 @@ namespace {
     thread_local bool in_swap = false;
     std::atomic<bool> screenshot_busy {false};
 
+#ifdef SPICE_OPENGL_PROBE
+    decltype(wglGetProcAddress) *get_proc_address = nullptr;
+    using ProbeClock = std::chrono::steady_clock;
+    constexpr const char *probe_modes[] {"legacy", "shader", "shader-pbo"};
+    constexpr const char *probe_metric_names[] {
+        "hook_cpu_ms", "swap_cpu_ms", "frame_interval_ms", "finish_cpu_ms", "context_cpu_ms",
+        "state_cpu_ms", "copy_cpu_ms", "draw_cpu_ms", "read_issue_cpu_ms", "read_map_cpu_ms",
+        "pbo_latency_frames"};
+    struct ProbeStats {
+        std::array<graphics::opengl::ProbeMetric, std::size(probe_metric_names)> metrics;
+        uint64_t frames = 0, capture_issued = 0, capture_completed = 0, capture_dropped = 0;
+        int active_mode = 0;
+        bool available = false;
+        graphics::opengl::ImageRect source;
+        int width = 0, height = 0;
+        cfg::fullscreen_setting scene;
+        bool linear = false, resize = false;
+        std::string description = "shader capability probe runs when selected";
+        std::string error;
+    };
+    std::mutex probe_mutex;
+    ProbeStats probe_stats;
+    std::atomic<int> probe_requested {0};
+    std::atomic<uint64_t> probe_epoch {0};
+    struct ProbeFrameStats {
+        bool tracked = false;
+        uint64_t epoch = 0;
+        double finish_ms = 0, context_ms = 0;
+        unsigned capture_issued = 0, capture_completed = 0, capture_dropped = 0;
+        graphics::opengl::ImageRect source;
+        int width = 0, height = 0;
+        cfg::fullscreen_setting scene;
+        bool linear = false, resize = false;
+        graphics::opengl::ProbeTiming timings;
+    };
+    thread_local ProbeFrameStats probe_frame;
+
+    struct ProbeCaptureGuard {
+        int screen;
+        uint64_t request;
+        bool pending;
+
+        ProbeCaptureGuard(int screen, uint64_t request, bool pending)
+            : screen(screen), request(request), pending(pending) {
+            probe_frame.capture_issued += pending;
+        }
+
+        void drop() noexcept {
+            if (!pending) return;
+            pending = false;
+            try { graphics_capture_skip_request(screen, request); } catch (...) {}
+            ++probe_frame.capture_dropped;
+        }
+
+        void deliver(std::shared_ptr<uint8_t[]> pixels, int width, int height) {
+            const bool accepted = graphics_capture_enqueue_request(screen, request, std::move(pixels), width, height);
+            pending = false;
+            if (accepted) ++probe_frame.capture_completed;
+            else ++probe_frame.capture_dropped;
+        }
+
+        ~ProbeCaptureGuard() { drop(); }
+    };
+
+    double probe_elapsed(ProbeClock::time_point start) {
+        return std::chrono::duration<double, std::milli>(ProbeClock::now() - start).count();
+    }
+
+    void probe_active(int mode, bool available, const std::string &description, const std::string &error) {
+        std::lock_guard lock(probe_mutex);
+        if (probe_stats.active_mode != mode || probe_stats.available != available || probe_stats.error != error) {
+            log_info("graphics::opengl", "probe active={}, available={}, detail={}, error={}",
+                    probe_modes[mode], available, description, error);
+        }
+        probe_stats.active_mode = mode;
+        probe_stats.available = available;
+        probe_stats.description = description;
+        probe_stats.error = error;
+    }
+
+    void probe_record_swap(double hook_ms, double swap_ms, ProbeClock::time_point start) noexcept try {
+        if (!probe_frame.tracked) return;
+        static thread_local auto previous = ProbeClock::time_point {};
+        static thread_local uint64_t previous_epoch = ~uint64_t {0};
+        static auto last_log = ProbeClock::now();
+        bool write_log = false;
+        uint64_t frames = 0, issued = 0, completed = 0, dropped = 0;
+        int mode = 0;
+        std::array<double, std::size(probe_metric_names)> means {};
+        double hook_max = 0, interval_max = 0;
+        {
+            std::lock_guard lock(probe_mutex);
+            if (probe_frame.epoch != probe_epoch.load()) return;
+            auto &m = probe_stats.metrics;
+            m[0].add(hook_ms); m[1].add(swap_ms);
+            if (previous_epoch == probe_frame.epoch && previous != ProbeClock::time_point {}) {
+                m[2].add(std::chrono::duration<double, std::milli>(start - previous).count());
+            }
+            previous = start; previous_epoch = probe_frame.epoch;
+            m[3].add(probe_frame.finish_ms); m[4].add(probe_frame.context_ms);
+            m[5].add(probe_frame.timings.state_ms); m[6].add(probe_frame.timings.copy_ms);
+            m[7].add(probe_frame.timings.draw_ms);
+            if (probe_frame.timings.read_issue_ms > 0) m[8].add(probe_frame.timings.read_issue_ms);
+            if (probe_frame.timings.read_map_ms > 0) m[9].add(probe_frame.timings.read_map_ms);
+            if (probe_frame.timings.pbo_latency_frames) m[10].add(probe_frame.timings.pbo_latency_frames);
+            ++probe_stats.frames;
+            probe_stats.capture_issued += probe_frame.capture_issued;
+            probe_stats.capture_completed += probe_frame.capture_completed;
+            probe_stats.capture_dropped += probe_frame.capture_dropped;
+            probe_stats.source = probe_frame.source;
+            probe_stats.width = probe_frame.width; probe_stats.height = probe_frame.height;
+            probe_stats.scene = probe_frame.scene;
+            probe_stats.linear = probe_frame.linear; probe_stats.resize = probe_frame.resize;
+            if (start - last_log >= std::chrono::seconds(5)) {
+                last_log = start; write_log = true;
+                frames = probe_stats.frames;
+                issued = probe_stats.capture_issued;
+                completed = probe_stats.capture_completed;
+                dropped = probe_stats.capture_dropped;
+                mode = probe_stats.active_mode;
+                for (size_t index = 0; index < m.size(); ++index) {
+                    means[index] = m[index].count ? m[index].total / m[index].count : 0;
+                }
+                hook_max = m[0].maximum;
+                interval_max = m[2].maximum;
+            }
+        }
+        // Percentiles are computed on the requesting WS thread, outside the render loop.
+        if (write_log) log_info("graphics::opengl",
+                "probe mode={} frames={} cpu mean ms: hook={:.3f} swap={:.3f} interval={:.3f} finish={:.3f} context={:.3f} state={:.3f} copy={:.3f} draw={:.3f} read={:.3f} map={:.3f}; max hook={:.3f} interval={:.3f}; capture issued={} completed={} dropped={} pbo frames={:.2f}",
+                probe_modes[mode], frames, means[0], means[1], means[2], means[3], means[4],
+                means[5], means[6], means[7], means[8], means[9], hook_max, interval_max,
+                issued, completed, dropped, means[10]);
+    } catch (...) {}
+#endif
+
     struct Context {
         HGLRC resize_context = nullptr;
         HWND owner_window = nullptr;
@@ -42,6 +187,17 @@ namespace {
         GLenum buffer = 0;
         bool warned = false;
         bool logged = false;
+#ifdef SPICE_OPENGL_PROBE
+        graphics::opengl::ProbeRenderer probe;
+        bool probe_attempted = false;
+        bool probe_available = false;
+        bool probe_capture_pending = false;
+        uint64_t probe_capture_request = 0;
+        uint64_t probe_capture_epoch = 0;
+        int probe_mode = 0;
+        int probe_request_seen = -1;
+        std::string probe_error_seen;
+#endif
     };
     // Game contexts may move between equivalent DC handles; all resources are context-owned.
     std::map<HGLRC, Context> contexts;
@@ -138,10 +294,20 @@ namespace {
             return;
         }
 
+#ifdef SPICE_OPENGL_PROBE
+        probe_frame.tracked = true;
+        probe_frame.epoch = probe_epoch.load();
+#endif
         graphics_poll_screenshot_hotkey();
         bool screenshot = !screenshot_busy && graphics_screenshot_consume();
         int screen = 0;
+#ifdef SPICE_OPENGL_PROBE
+        uint64_t capture_request = 0;
+        bool capture = graphics_capture_consume_request(&screen, &capture_request);
+        ProbeCaptureGuard capture_guard(screen, capture_request, capture);
+#else
         bool capture = graphics_capture_consume(&screen);
+#endif
         if (capture && screen != 0) {
             graphics_capture_skip(screen);
             capture = false;
@@ -179,6 +345,104 @@ namespace {
         const bool resize = graphics::opengl::requires_resize(scene) ||
             (fit && (source.x != 0 || source.y != 0 || source.width != width || source.height != height));
         // No extra copy, context switch or GPU synchronization for an identity scene.
+#ifdef SPICE_OPENGL_PROBE
+        probe_frame.source = source;
+        probe_frame.width = width; probe_frame.height = height;
+        probe_frame.scene = scene;
+        probe_frame.linear = linear_filter; probe_frame.resize = resize;
+        const int requested = probe_requested.load();
+        if (requested && !state.probe_attempted) {
+            state.probe_attempted = true;
+            state.probe_available = state.probe.initialize(gl, [](const char *name) -> void * {
+                auto address = get_proc_address(name);
+                const auto value = reinterpret_cast<uintptr_t>(address);
+                if (!address || value <= 3 || value == ~uintptr_t {0}) {
+                    address = GetProcAddress(GetModuleHandleW(L"opengl32.dll"), name);
+                }
+                return reinterpret_cast<void *>(address);
+            });
+        }
+        const bool async_available = state.probe_available && state.probe.async_supported();
+        const int selected = requested && state.probe_available && (requested != 2 || async_available) ? requested : 0;
+        if (state.probe_capture_pending && (selected != 2 ||
+                state.probe_capture_epoch != probe_frame.epoch ||
+                !graphics_capture_request_active(0, state.probe_capture_request))) {
+            state.probe.abandon_readback();
+            state.probe_capture_pending = false;
+            graphics_capture_skip_request(0, state.probe_capture_request);
+            if (state.probe_capture_epoch == probe_frame.epoch) ++probe_frame.capture_dropped;
+        }
+        if (state.probe_request_seen != requested || state.probe_mode != selected) {
+            state.probe_request_seen = requested;
+            state.probe_mode = selected;
+            probe_active(selected, state.probe_available,
+                    state.probe_attempted ? state.probe.description() : "legacy baseline; shader not initialized",
+                    requested == 2 && state.probe_available && !async_available ? "PBO/sync entrypoints unavailable" :
+                        state.probe_attempted ? state.probe.error() : "");
+        }
+        if (selected) {
+            if (!state.buffer) {
+                GLint double_buffer = GL_FALSE;
+                gl.glGetIntegerv(GL_DOUBLEBUFFER, &double_buffer);
+                state.buffer = double_buffer ? GL_BACK : GL_FRONT;
+            }
+            auto &timing = probe_frame.timings;
+            auto ready = state.probe.poll_readback(timing);
+            if (ready.pixels && state.probe_capture_pending) {
+                const bool accepted = graphics_capture_enqueue_request(0, state.probe_capture_request,
+                        std::shared_ptr<uint8_t[]>(std::move(ready.pixels)), ready.width, ready.height);
+                state.probe_capture_pending = false;
+                if (accepted) ++probe_frame.capture_completed;
+                else ++probe_frame.capture_dropped;
+            } else if (state.probe_capture_pending && !state.probe.readback_pending()) {
+                state.probe_capture_pending = false;
+                graphics_capture_skip_request(0, state.probe_capture_request);
+                ++probe_frame.capture_dropped;
+            }
+            const bool drawn = !resize || state.probe.draw(source, width, height, scene,
+                    linear_filter, state.buffer, timing);
+            if (drawn) {
+                if (screenshot || (capture && selected == 1)) {
+                    auto frame = state.probe.read_sync(width, height, state.buffer, timing);
+                    if (frame.pixels) {
+                        auto shared = std::shared_ptr<uint8_t[]>(std::move(frame.pixels));
+                        if (capture) {
+                            capture_guard.deliver(shared, frame.width, frame.height);
+                        }
+                        if (screenshot) save_screenshot(std::move(shared), frame.width, frame.height);
+                    } else {
+                        if (capture && (selected == 1 || screenshot)) {
+                            capture_guard.drop();
+                        }
+                        if (screenshot) graphics_screenshot_trigger();
+                    }
+                }
+                if (capture && selected == 2 && !screenshot) {
+                    if (!state.probe.readback_pending() && graphics_capture_request_active(screen, capture_request)) {
+                        state.probe_capture_pending = true;
+                        state.probe_capture_request = capture_request;
+                        state.probe_capture_epoch = probe_frame.epoch;
+                        if (state.probe.issue_readback(width, height, state.buffer, timing)) {
+                            capture_guard.pending = false;
+                        } else {
+                            state.probe_capture_pending = false;
+                            capture_guard.drop();
+                        }
+                    } else {
+                        capture_guard.drop();
+                    }
+                }
+                if (state.probe_error_seen != state.probe.error()) {
+                    state.probe_error_seen = state.probe.error();
+                    probe_active(selected, true, state.probe.description(), state.probe_error_seen);
+                }
+                return;
+            }
+            state.probe_available = false;
+            state.probe_mode = 0;
+            probe_active(0, false, state.probe.description(), state.probe.error());
+        }
+#endif
         if (!resize && !screenshot && !capture) return;
         if (!state.resize_context) state.resize_context = create_context(dc);
         if (!state.resize_context) {
@@ -190,8 +454,18 @@ namespace {
         // Complete game rendering before accessing its default framebuffer from our context.
         // The isolated compatibility context preserves shaders, FBOs, matrices, texture units,
         // GL error state and all other game state without relying on partial push/pop lists.
+#ifdef SPICE_OPENGL_PROBE
+        auto stage_start = ProbeClock::now();
+#endif
         gl.glFinish();
+#ifdef SPICE_OPENGL_PROBE
+        probe_frame.finish_ms += probe_elapsed(stage_start);
+        stage_start = ProbeClock::now();
+#endif
         const bool switched = make_current(dc, state.resize_context);
+#ifdef SPICE_OPENGL_PROBE
+        probe_frame.context_ms += probe_elapsed(stage_start);
+#endif
         bool drawn = false;
         std::unique_ptr<uint8_t[]> pixels;
         if (switched) {
@@ -200,13 +474,43 @@ namespace {
                 gl.glGetIntegerv(GL_DOUBLEBUFFER, &double_buffer);
                 state.buffer = double_buffer ? GL_BACK : GL_FRONT;
             }
-            if (resize) drawn = state.image.draw(gl, source, width, height, scene, linear_filter, state.buffer);
-            if (screenshot || capture) pixels = graphics::opengl::read_pixels(gl, width, height, state.buffer);
+            if (resize) {
+#ifdef SPICE_OPENGL_PROBE
+                stage_start = ProbeClock::now();
+#endif
+                drawn = state.image.draw(gl, source, width, height, scene, linear_filter, state.buffer);
+#ifdef SPICE_OPENGL_PROBE
+                probe_frame.timings.draw_ms += probe_elapsed(stage_start);
+#endif
+            }
+            if (screenshot || capture) {
+#ifdef SPICE_OPENGL_PROBE
+                stage_start = ProbeClock::now();
+#endif
+                pixels = graphics::opengl::read_pixels(gl, width, height, state.buffer);
+#ifdef SPICE_OPENGL_PROBE
+                probe_frame.timings.read_issue_ms += probe_elapsed(stage_start);
+#endif
+            }
             // A successful synchronous readback already completed the final draw.
-            if (drawn && !pixels) gl.glFinish();
+            if (drawn && !pixels) {
+#ifdef SPICE_OPENGL_PROBE
+                stage_start = ProbeClock::now();
+#endif
+                gl.glFinish();
+#ifdef SPICE_OPENGL_PROBE
+                probe_frame.finish_ms += probe_elapsed(stage_start);
+#endif
+            }
         }
         // wglMakeCurrent failure unbinds the old context, so restore it on BOTH paths.
+#ifdef SPICE_OPENGL_PROBE
+        stage_start = ProbeClock::now();
+#endif
         const bool restored = make_current(restore_dc, game_context);
+#ifdef SPICE_OPENGL_PROBE
+        probe_frame.context_ms += probe_elapsed(stage_start);
+#endif
         if ((!switched || (resize && !drawn) || ((screenshot || capture) && !pixels) || !restored) && !state.warned) {
             log_warning("graphics::opengl", "frame processing failed (switched={}, drawn={}, restored={}, error={})",
                     switched, drawn, restored, GetLastError());
@@ -220,10 +524,20 @@ namespace {
         lock.unlock();
         if (pixels && restored) {
             auto shared = std::shared_ptr<uint8_t[]>(std::move(pixels));
-            if (capture) graphics_capture_enqueue(screen, shared, width, height);
+            if (capture) {
+#ifdef SPICE_OPENGL_PROBE
+                capture_guard.deliver(shared, width, height);
+#else
+                graphics_capture_enqueue(screen, shared, width, height);
+#endif
+            }
             if (screenshot) save_screenshot(std::move(shared), width, height);
         } else if (capture) {
+#ifdef SPICE_OPENGL_PROBE
+            capture_guard.drop();
+#else
             graphics_capture_skip(screen);
+#endif
         }
     }
 
@@ -241,8 +555,19 @@ namespace {
     BOOL WINAPI swap_buffers_hook(HDC dc) {
         if (in_swap) return swap_buffers(dc);
         in_swap = true;
+#ifdef SPICE_OPENGL_PROBE
+        probe_frame = {};
+        const auto start = ProbeClock::now();
+#endif
         process_frame(dc);
+#ifdef SPICE_OPENGL_PROBE
+        const double hook_ms = probe_elapsed(start);
+        const auto swap_start = ProbeClock::now();
+#endif
         const auto result = swap_buffers(dc);
+#ifdef SPICE_OPENGL_PROBE
+        probe_record_swap(hook_ms, probe_elapsed(swap_start), start);
+#endif
         in_swap = false;
         return result;
     }
@@ -250,8 +575,19 @@ namespace {
     BOOL WINAPI swap_layers_hook(HDC dc, UINT planes) {
         if (in_swap) return swap_layers(dc, planes);
         in_swap = true;
+#ifdef SPICE_OPENGL_PROBE
+        probe_frame = {};
+        const auto start = ProbeClock::now();
+#endif
         if (planes & WGL_SWAP_MAIN_PLANE) process_frame(dc);
+#ifdef SPICE_OPENGL_PROBE
+        const double hook_ms = probe_elapsed(start);
+        const auto swap_start = ProbeClock::now();
+#endif
         const auto result = swap_layers(dc, planes);
+#ifdef SPICE_OPENGL_PROBE
+        probe_record_swap(hook_ms, probe_elapsed(swap_start), start);
+#endif
         in_swap = false;
         return result;
     }
@@ -273,6 +609,26 @@ namespace {
     BOOL WINAPI delete_context_hook(HGLRC context) {
         // A failed deletion (e.g. a context current on another thread) must retain its resources.
         std::lock_guard lock(contexts_mutex);
+#ifdef SPICE_OPENGL_PROBE
+        const auto probe_entry = contexts.find(context);
+        if (probe_entry != contexts.end()) {
+            auto &state = probe_entry->second;
+            if (state.probe_capture_pending) {
+                graphics_capture_skip_request(0, state.probe_capture_request);
+                state.probe_capture_pending = false;
+                if (state.probe_capture_epoch == probe_epoch.load()) {
+                    std::lock_guard stats_lock(probe_mutex);
+                    ++probe_stats.capture_dropped;
+                }
+            }
+            if (get_context() == context) {
+                state.probe.release();
+                state.probe_attempted = false;
+                state.probe_available = false;
+                state.probe_request_seen = -1;
+            }
+        }
+#endif
         const auto result = delete_context(context);
         if (result) {
             const auto entry = contexts.find(context);
@@ -284,6 +640,74 @@ namespace {
         return result;
     }
 }
+
+#ifdef SPICE_OPENGL_PROBE
+std::string graphics_opengl_probe(std::string_view mode, bool reset) {
+    auto snapshot = std::make_unique<ProbeStats>();
+    {
+        std::lock_guard lock(probe_mutex);
+        if (!mode.empty()) {
+            const int selected = mode == "shader" ? 1 : mode == "shader-pbo" ? 2 : 0;
+            probe_requested = selected;
+        }
+        if (reset) {
+            for (auto &metric : probe_stats.metrics) metric = {};
+            probe_stats.frames = 0;
+            probe_stats.capture_issued = 0;
+            probe_stats.capture_completed = 0;
+            probe_stats.capture_dropped = 0;
+            ++probe_epoch;
+        }
+        *snapshot = probe_stats;
+    }
+    rapidjson::Document doc(rapidjson::kObjectType);
+    auto &alloc = doc.GetAllocator();
+    doc.AddMember("build", rapidjson::Value(SPICE_OPENGL_PROBE_REVISION, alloc), alloc);
+    doc.AddMember("requested_mode", rapidjson::Value(probe_modes[probe_requested.load()], alloc), alloc);
+    doc.AddMember("active_mode", rapidjson::Value(probe_modes[snapshot->active_mode], alloc), alloc);
+    doc.AddMember("available", snapshot->available, alloc);
+    doc.AddMember("description", rapidjson::Value(snapshot->description.c_str(), alloc), alloc);
+    doc.AddMember("error", rapidjson::Value(snapshot->error.c_str(), alloc), alloc);
+    doc.AddMember("frames", snapshot->frames, alloc);
+    doc.AddMember("capture_issued", snapshot->capture_issued, alloc);
+    doc.AddMember("capture_completed", snapshot->capture_completed, alloc);
+    doc.AddMember("capture_dropped", snapshot->capture_dropped, alloc);
+    rapidjson::Value source(rapidjson::kArrayType), output(rapidjson::kArrayType);
+    source.PushBack(snapshot->source.x, alloc).PushBack(snapshot->source.y, alloc)
+            .PushBack(snapshot->source.width, alloc).PushBack(snapshot->source.height, alloc);
+    output.PushBack(snapshot->width, alloc).PushBack(snapshot->height, alloc);
+    doc.AddMember("source", source, alloc);
+    doc.AddMember("output", output, alloc);
+    doc.AddMember("resize_active", snapshot->resize, alloc);
+    doc.AddMember("linear_filter", snapshot->linear, alloc);
+    rapidjson::Value scene(rapidjson::kObjectType);
+    scene.AddMember("scale_x", snapshot->scene.scale_x, alloc);
+    scene.AddMember("scale_y", snapshot->scene.scale_y, alloc);
+    scene.AddMember("offset_x", snapshot->scene.offset_x, alloc);
+    scene.AddMember("offset_y", snapshot->scene.offset_y, alloc);
+    scene.AddMember("duplicate", static_cast<int>(snapshot->scene.duplicate), alloc);
+    doc.AddMember("scene", scene, alloc);
+    doc.AddMember("gpu_timing_measured", false, alloc);
+    rapidjson::Value metrics(rapidjson::kObjectType);
+    for (size_t index = 0; index < snapshot->metrics.size(); ++index) {
+        const auto metric = snapshot->metrics[index].summarize();
+        rapidjson::Value value(rapidjson::kObjectType);
+        value.AddMember("count", metric.count, alloc);
+        value.AddMember("samples", static_cast<uint64_t>(metric.samples), alloc);
+        value.AddMember("mean", metric.mean, alloc);
+        value.AddMember("p50", metric.p50, alloc);
+        value.AddMember("p95", metric.p95, alloc);
+        value.AddMember("p99", metric.p99, alloc);
+        value.AddMember("max", metric.maximum, alloc);
+        metrics.AddMember(rapidjson::Value(probe_metric_names[index], alloc), value, alloc);
+    }
+    doc.AddMember("metrics", metrics, alloc);
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    doc.Accept(writer);
+    return {buffer.GetString(), buffer.GetSize()};
+}
+#endif
 
 void graphics_opengl_window_created(HWND window, std::string_view title) {
     // Preserve the game's canvas before launcher settings resize the main window.
@@ -318,6 +742,9 @@ void graphics_opengl_init() {
     LOAD_WGL(wglCreateContext, create_context)
     LOAD_WGL(wglMakeCurrent, make_current)
     LOAD_WGL(wglDeleteContext, delete_context)
+#ifdef SPICE_OPENGL_PROBE
+    LOAD_WGL(wglGetProcAddress, get_proc_address)
+#endif
 #undef LOAD_WGL
     swap_buffers = reinterpret_cast<decltype(swap_buffers)>(
             GetProcAddress(GetModuleHandleW(L"gdi32.dll"), "SwapBuffers"));
@@ -334,4 +761,8 @@ void graphics_opengl_init() {
     }
     detour::trampoline_try("opengl32.dll", "wglDeleteContext", delete_context_hook, &delete_context);
     log_info("graphics::opengl", "legacy image resize hooks initialized");
+#ifdef SPICE_OPENGL_PROBE
+    log_info("graphics::opengl", "cabinet comparison build={}, WS capture.opengl_probe enabled, initial mode=legacy; metrics are CPU elapsed times",
+            SPICE_OPENGL_PROBE_REVISION);
+#endif
 }

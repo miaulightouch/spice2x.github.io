@@ -242,6 +242,8 @@ if(SPICE_XP)
     add_compile_definitions(SPICE_XP=1)
 endif()
 
+option(SPICE_OPENGL_PROBE "Build cabinet OpenGL comparison diagnostics" OFF)
+
 # acioemu log
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DACIOEMU_LOG")
 
@@ -907,6 +909,16 @@ set(SOURCE_FILES ${SOURCE_FILES}
 list(APPEND SOURCE_FILES
         hooks/graphics/backends/opengl/opengl_backend.cpp
         hooks/graphics/backends/opengl/opengl_resize.cpp)
+if(SPICE_OPENGL_PROBE)
+    list(APPEND SOURCE_FILES hooks/graphics/backends/opengl/opengl_probe.cpp)
+    set_source_files_properties(
+            hooks/graphics/backends/opengl/opengl_backend.cpp
+            hooks/graphics/backends/opengl/opengl_probe.cpp
+            api/modules/capture.cpp
+            hooks/graphics/graphics.cpp
+            PROPERTIES COMPILE_DEFINITIONS
+            "SPICE_OPENGL_PROBE=1;SPICE_OPENGL_PROBE_REVISION=\"${SPICE_CONTROLLER_GIT_VERSION}\"")
+endif()
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} PREFIX "Source Files" FILES ${SOURCE_FILES})
 
