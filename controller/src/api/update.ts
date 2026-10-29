@@ -10,6 +10,7 @@ export interface UpdateStatus {
   xp: boolean;
   executable: string;
   executable_crc32: number;
+  update_id: string;
   max_file_bytes: number;
   max_total_bytes: number;
   chunk_bytes: number;
@@ -79,6 +80,7 @@ export function parseUpdateStatus(data: unknown[]): UpdateStatus {
   if (!isRecord(value) || !string(value.version) || !string(value.executable) ||
       !['x86', 'x64'].includes(String(value.architecture)) || typeof value.xp !== 'boolean' ||
       !finiteInteger(value.executable_crc32, 0, 0xffffffff) ||
+      (value.update_id !== undefined && !string(value.update_id)) ||
       !finiteInteger(value.max_file_bytes, 1, HARD_MAX_FILE_BYTES) ||
       !finiteInteger(value.max_total_bytes, 1, HARD_MAX_TOTAL_BYTES) ||
       !finiteInteger(value.chunk_bytes, 1, HARD_MAX_CHUNK_BYTES) ||
@@ -89,6 +91,7 @@ export function parseUpdateStatus(data: unknown[]): UpdateStatus {
     xp: value.xp,
     executable: value.executable,
     executable_crc32: value.executable_crc32,
+    update_id: typeof value.update_id === 'string' ? value.update_id : '',
     max_file_bytes: value.max_file_bytes,
     max_total_bytes: value.max_total_bytes,
     chunk_bytes: value.chunk_bytes,

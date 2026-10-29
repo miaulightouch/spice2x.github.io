@@ -1264,21 +1264,36 @@ bool run_update_helper(int argc, char *argv[], int &exitcode) {
 
 void acknowledge_update() {
 #ifdef _WIN32
-    constexpr wchar_t ready_variable[] = L"SPICE_OTA_READY_EVENT";
-    bool present = false;
-    const auto event_name = environment_value(ready_variable, present);
     const std::wstring prefix = L"Local\\Spice2xOtaReady-";
-    if (!present || event_name.size() != prefix.size() + 32 ||
-            event_name.compare(0, prefix.size(), prefix) != 0 ||
-            !is_hex_id(std::string(event_name.begin() + prefix.size(), event_name.end()))) {
+    const auto id = current_update_id();
+    if (id.empty()) {
         return;
     }
+    const auto event_name = prefix + std::wstring(id.begin(), id.end());
     const auto event = OpenEventW(EVENT_MODIFY_STATE, FALSE, event_name.c_str());
     if (!event) {
         return;
     }
     SetEvent(event);
     CloseHandle(event);
+#endif
+}
+
+std::string current_update_id() {
+#ifdef _WIN32
+    constexpr wchar_t ready_variable[] = L"SPICE_OTA_READY_EVENT";
+    constexpr wchar_t prefix[] = L"Local\\Spice2xOtaReady-";
+    bool present = false;
+    const auto event_name = environment_value(ready_variable, present);
+    const auto prefix_length = std::wstring(prefix).size();
+    if (!present || event_name.size() != prefix_length + 32 ||
+            event_name.compare(0, prefix_length, prefix) != 0) {
+        return {};
+    }
+    const std::string id(event_name.begin() + prefix_length, event_name.end());
+    return is_hex_id(id) ? id : std::string();
+#else
+    return {};
 #endif
 }
 

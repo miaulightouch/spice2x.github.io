@@ -87,7 +87,7 @@ function clickButton(root: HostNode, text: string | RegExp): void {
   (button.props.onClick as (event: Event) => void)({} as Event);
 }
 
-function flowController(status: UpdateStatus, newCrc32: number) {
+function flowController(status: UpdateStatus, newCrc32: number, readyRead = 3) {
   const connected = ref(true); const connection = ref<'connected' | 'disconnected'>('connected');
   const updateStatus = ref<UpdateStatus>({ ...status }); const updateError = ref(''); const busy = ref(''); const version = ref('new');
   let statusReads = 0; let beginCalls = 0; let applyCalls = 0; let reconnectCalls = 0; const notifications: string[] = [];
@@ -95,7 +95,7 @@ function flowController(status: UpdateStatus, newCrc32: number) {
     status: connection, connected, demo: ref(false), configuredPassword: ref(true), busy, updateStatus, updateError, version,
     async readUpdateStatus() {
       statusReads++;
-      updateStatus.value = { ...status, executable_crc32: statusReads >= 3 ? newCrc32 : status.executable_crc32 };
+      updateStatus.value = { ...status, executable_crc32: statusReads >= readyRead ? newCrc32 : status.executable_crc32, update_id: statusReads >= readyRead ? `upload-${beginCalls}` : status.update_id };
       return updateStatus.value;
     },
     async beginUpdate() { beginCalls++; return 'upload-' + beginCalls; },
@@ -125,7 +125,7 @@ test('system update UI gates disconnected and passwordless sessions before expos
   try {
     locale.value = 'en';
     const { default: SystemUpdate } = await server.ssrLoadModule('/src/components/SystemUpdate.vue');
-    const status = { version: 'v', architecture: 'x64', xp: false, executable: 'spice64.exe', executable_crc32: 1, max_file_bytes: 64, max_total_bytes: 128, chunk_bytes: 32 };
+    const status = { version: 'v', architecture: 'x64', xp: false, executable: 'spice64.exe', executable_crc32: 1, update_id: '', max_file_bytes: 64, max_total_bytes: 128, chunk_bytes: 32 };
     const disconnected = await renderToString(createSSRApp(SystemUpdate, { controller: fakeController('disconnected', undefined), active: true, connected: false, demo: false, configuredPassword: false }));
     assert.match(disconnected, /Connect to update|連線後更新/);
     assert.doesNotMatch(disconnected, /type="file"/);
@@ -145,7 +145,7 @@ test('system update clears a socket upload id before allowing a fresh upload aft
   });
   try {
     const SystemUpdate = await loadClientSystemUpdate(server);
-    const status: UpdateStatus = { version: 'old', architecture: 'x64', xp: false, executable: 'spice64.exe', executable_crc32: 0, max_file_bytes: 64, max_total_bytes: 128, chunk_bytes: 32 };
+    const status: UpdateStatus = { version: 'old', architecture: 'x64', xp: false, executable: 'spice64.exe', executable_crc32: 0, update_id: '', max_file_bytes: 64, max_total_bytes: 128, chunk_bytes: 32 };
     const flow = flowController(status, 0);
     const props = reactive({ active: true, connected: true, demo: false, configuredPassword: true });
     const root: HostNode = { type: 'root', children: [], props: {}, text: '' };
@@ -188,7 +188,7 @@ test('system update applies once and verifies the new executable crc after an ol
   const originalSetTimeout = globalThis.setTimeout;
   try {
     const SystemUpdate = await loadClientSystemUpdate(server);
-    const status: UpdateStatus = { version: 'old', architecture: 'x64', xp: false, executable: 'spice64.exe', executable_crc32: 0, max_file_bytes: 64, max_total_bytes: 128, chunk_bytes: 32 };
+    const status: UpdateStatus = { version: 'old', architecture: 'x64', xp: false, executable: 'spice64.exe', executable_crc32: 0, update_id: '', max_file_bytes: 64, max_total_bytes: 128, chunk_bytes: 32 };
     const bytes = new Uint8Array([1, 2, 3]);
     const expectedCrc32 = selectUpdateFiles('spice64.exe', bytes, status)[0]!.crc32;
     const flow = flowController(status, expectedCrc32);
@@ -213,6 +213,58 @@ test('system update applies once and verifies the new executable crc after an ol
     assert.equal(flow.applyCalls, 1);
     assert.ok(flow.reconnectCalls >= 2);
     assert.equal(flow.notifications.length, 1);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    await server.close();
+  }
+});
+
+test('system update waits for the matching upload id when the executable crc is already equal', async () => {
+  const server = await createServer({
+    root: fileURLToPath(new URL('..', import.meta.url)), configFile: false,
+    plugins: [vue()], optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom',
+  });
+  const originalSetTimeout = globalThis.setTimeout;
+  const timers: Array<() => void> = [];
+  try {
+    const SystemUpdate = await loadClientSystemUpdate(server);
+    const bytes = new Uint8Array([1, 2, 3]);
+    const baseStatus: UpdateStatus = { version: 'old', architecture: 'x64', xp: false, executable: 'spice64.exe', executable_crc32: 0, update_id: '', max_file_bytes: 64, max_total_bytes: 128, chunk_bytes: 32 };
+    const expectedCrc32 = selectUpdateFiles('spice64.exe', bytes, baseStatus)[0]!.crc32;
+    const status: UpdateStatus = { ...baseStatus, executable_crc32: expectedCrc32 };
+    const flow = flowController(status, expectedCrc32, 3);
+    const props = reactive({ active: true, connected: true, demo: false, configuredPassword: true });
+    const root: HostNode = { type: 'root', children: [], props: {}, text: '' };
+    const app = hostRenderer().createApp({ setup: () => () => h(SystemUpdate, { controller: flow.controller, ...props }) });
+    app.mount(root);
+    await settle();
+    updateFileInput(root, new File([bytes], 'spice64.exe'));
+    await settle();
+    clickButton(root, /Upload files|上傳檔案|上传文件|ファイルをアップロード|파일 업로드/);
+    await settle();
+
+    globalThis.setTimeout = ((callback: TimerHandler) => {
+      if (typeof callback === 'function') timers.push(callback as () => void);
+      return timers.length as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout;
+    clickButton(root, /Update and restart|更新並重新啟動|更新并重新启动|更新して再起動|업데이트 및 다시 시작/);
+    await settle();
+    assert.equal(timers.length, 1);
+    timers.shift()!();
+    await settle();
+    assert.equal(flow.reconnectCalls, 1);
+    assert.equal(flow.updateStatus.value.executable_crc32, expectedCrc32);
+    assert.equal(flow.updateStatus.value.update_id, '');
+    assert.equal(flow.notifications.length, 0);
+    assert.equal(timers.length, 1);
+
+    timers.shift()!();
+    await settle();
+    assert.equal(flow.applyCalls, 1);
+    assert.equal(flow.reconnectCalls, 2);
+    assert.equal(flow.updateStatus.value.update_id, 'upload-1');
+    assert.equal(flow.notifications.length, 1);
+    app.unmount();
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     await server.close();

@@ -41,6 +41,7 @@ namespace ota {
     inline bool fail = false;
     inline std::string active;
     inline uint32_t executable_crc32() { return 1234; }
+    inline std::string current_update_id() { return "0123456789abcdef0123456789abcdef"; }
 
     inline std::string begin(const std::vector<UploadFile> &files) {
         ++begins;

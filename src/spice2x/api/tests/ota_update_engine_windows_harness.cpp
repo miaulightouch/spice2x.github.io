@@ -55,6 +55,26 @@ static void write_marker(const char *path) {
     stream << "ok\n";
 }
 
+static void write_value_marker(const char *path, const std::string &value) {
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    stream << value << '\n';
+}
+
+[[maybe_unused]] static void mark_successful_update_child() {
+    const auto id = ota::current_update_id();
+    const auto valid = id.size() == 32 && std::all_of(id.begin(), id.end(), [](char character) {
+        return (character >= '0' && character <= '9') ||
+                (character >= 'a' && character <= 'f') ||
+                (character >= 'A' && character <= 'F');
+    });
+    if (!valid) {
+        ExitProcess(4);
+    }
+    write_value_marker("success.update-id", id);
+    write_marker("success.ready");
+    ota::acknowledge_update();
+}
+
 static void seed_stale_staging() {
     constexpr char stage[] = ".spice2x-ota-0123456789abcdef0123456789abcdef";
     constexpr char lock_name[] = ".spice2x-ota-0123456789abcdef0123456789abcdef\\stage.lock";
@@ -209,12 +229,14 @@ int main(int argc, char **argv) {
 
 #if OTA_HARNESS_BEHAVIOR == 1
     if (update_child()) {
-        write_marker("success.ready");
-        ota::acknowledge_update();
+        mark_successful_update_child();
         Sleep(1500);
         return 0;
     }
     if (file_exists("failure.started")) {
+        if (!ota::current_update_id().empty()) {
+            ExitProcess(5);
+        }
         write_marker("rollback.ready");
         Sleep(500);
         return 0;
@@ -226,12 +248,14 @@ int main(int argc, char **argv) {
     }
 #else
     if (update_child()) {
-        write_marker("success.ready");
-        ota::acknowledge_update();
+        mark_successful_update_child();
         Sleep(1500);
         return 0;
     }
     if (file_exists("failure.started")) {
+        if (!ota::current_update_id().empty()) {
+            ExitProcess(5);
+        }
         write_marker("rollback.ready");
         Sleep(500);
         return 0;

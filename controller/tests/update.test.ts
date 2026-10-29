@@ -10,7 +10,7 @@ import { shouldReloadUpdateStatus, uploadUpdate, UpdateUploadCancelled, UpdateUp
 
 const status = (changes: Partial<UpdateStatus> = {}): UpdateStatus => ({
   version: '2026-10-29', architecture: 'x64', xp: false, executable: 'spice64.exe',
-  executable_crc32: 0,
+  executable_crc32: 0, update_id: '',
   max_file_bytes: 64 * 1024 * 1024, max_total_bytes: 128 * 1024 * 1024, chunk_bytes: 32768, ...changes,
 });
 
@@ -22,6 +22,8 @@ test('update status and finish parsers keep the native contract and advisory sig
   ] }]);
   assert.equal(result.files[1]!.signature.status, 'invalid');
   assert.equal(parseUpdateApply([{ restarting: true }]), true);
+  assert.equal(parseUpdateStatus([{ ...status(), update_id: undefined }]).update_id, '');
+  assert.throws(() => parseUpdateStatus([{ ...status(), update_id: 123 }]), /Invalid update API response/);
   assert.throws(() => parseUpdateStatus([{ ...status(), architecture: 'arm64' }]), /Invalid update API response/);
 });
 

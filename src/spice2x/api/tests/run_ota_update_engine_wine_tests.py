@@ -91,6 +91,13 @@ def assert_one_fixed_helper(directory: Path) -> None:
     assert helpers == [directory / ".spice2x-ota-helper.exe"], helpers
 
 
+def read_update_id(directory: Path) -> str:
+    value = (directory / "success.update-id").read_text().strip()
+    if len(value) != 32 or any(character not in "0123456789abcdefABCDEF" for character in value):
+        raise AssertionError(f"invalid update child ID: {value!r}")
+    return value
+
+
 def stop_wine(prefix: Path, arch: str = "win64") -> None:
     environment = os.environ.copy()
     environment.update({"WINEPREFIX": str(prefix), "WINEDEBUG": "-all", "WINEARCH": arch,
@@ -151,6 +158,7 @@ def main() -> int:
                 raise AssertionError(
                         f"success harness failed ({result.returncode}): {result.stderr}")
             wait_for(success_case / "success.ready")
+            first_update_id = read_update_id(success_case)
             wait_for(success_case / "stale.cleaned")
             wait_for_no_staging(success_case)
             assert active.read_bytes() == success_bytes
@@ -163,6 +171,7 @@ def main() -> int:
             # Reapply from the same directory. The previous helper is reused and the
             # prior installed executable remains available as the one-version backup.
             (success_case / "success.ready").unlink()
+            (success_case / "success.update-id").unlink()
             (success_case / "stale.cleaned").unlink()
             second_payload = success_case / "second-payload.exe"
             shutil.copy2(parent, second_payload)
@@ -172,6 +181,9 @@ def main() -> int:
                 raise AssertionError(
                         f"repeated success harness failed ({result.returncode}): {result.stderr}")
             wait_for(success_case / "success.ready")
+            second_update_id = read_update_id(success_case)
+            if second_update_id == first_update_id:
+                raise AssertionError("repeated OTA update reused its opaque ID")
             wait_for(success_case / "stale.cleaned")
             wait_for_no_staging(success_case)
             assert active.read_bytes() == parent_bytes

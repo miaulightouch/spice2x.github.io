@@ -34,6 +34,9 @@ namespace ota {
     void apply(const std::string &id);
     uint32_t executable_crc32();
 
+    // Returns the update ID inherited by a successfully launched update child, or empty normally.
+    std::string current_update_id();
+
     // Called before normal launcher initialization. It returns true only for the helper process.
     bool run_update_helper(int argc, char *argv[], int &exitcode);
 

@@ -38,6 +38,8 @@ int main() {
     assert(status["errors"].Empty());
     assert(status["data"][0]["chunk_bytes"].GetUint() == 32768);
     assert(status["data"][0]["executable_crc32"].GetUint() == 1234);
+    assert(std::string(status["data"][0]["update_id"].GetString()) ==
+        "0123456789abcdef0123456789abcdef");
     assert(std::string(status["data"][0]["executable"].GetString()) == "spice.exe");
     failed(call(owner, "status", "[1]"));
 

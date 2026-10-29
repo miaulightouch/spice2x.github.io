@@ -54,6 +54,8 @@ namespace api::modules {
         auto &alloc = res.doc()->GetAllocator();
         Value data(kObjectType);
         data.AddMember("version", Value(VERSION_STRING, alloc), alloc);
+        const auto update_id = ota::current_update_id();
+        data.AddMember("update_id", Value(update_id.c_str(), alloc), alloc);
         data.AddMember("architecture", Value(sizeof(void *) == 8 ? "x64" : "x86", alloc), alloc);
 #if SPICE_XP
         data.AddMember("xp", true, alloc);

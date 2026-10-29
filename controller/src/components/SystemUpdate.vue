@@ -190,7 +190,7 @@ async function apply(): Promise<void> {
     if (c.status.value === 'connected' && c.version.value) {
       const refreshed = await c.readUpdateStatus();
       if (token !== operation) return;
-      if (refreshed?.executable_crc32 === main.crc32) {
+      if (refreshed?.executable_crc32 === main.crc32 && refreshed.update_id === id) {
         phase.value = 'done'; uploadId.value = ''; c.notify(msg('msg.updateApplied', { version: c.version.value })); return;
       }
     }
