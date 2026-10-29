@@ -3,46 +3,53 @@
 set -euo pipefail
 umask 077
 
-if [[ -z "${OTA_SIGNING_PFX:-}" ]]; then
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [[ -f "$root/../../.env.local" ]]; then
+    source "$root/../../.env.local"
+fi
+
+if [[ "${1:-}" == "--prepare" ]]; then
+    pin=""
+    if [[ -n "${OTA_SIGNING_CERT:-}" ]]; then
+        pin=$(printf '%s\n' "$OTA_SIGNING_CERT" \
+            | openssl x509 -pubkey -noout \
+            | openssl pkey -pubin -outform DER \
+            | sha1sum | awk '{print $1}')
+    fi
+    {
+        printf '#pragma once\n#include <array>\n#include <cstdint>\nnamespace ota {\n'
+        printf 'inline constexpr std::array<std::uint8_t, 20> kPinnedPublicKeySha1 = {'
+        printf '%s' "$pin" | sed -E 's/(..)/0x\1, /g'
+        printf '};\n}\n'
+    } >"$root/build/ota_public_key.local.h"
     exit 0
 fi
 
-if ! command -v osslsigncode >/dev/null 2>&1; then
-    echo "OTA_SIGNING_PFX is set but osslsigncode is unavailable" >&2
+if (($#)); then
+    echo "usage: $0 [--prepare]" >&2
+    exit 1
+fi
+if [[ -z "${OTA_SIGNING_KEY:-}" && -z "${OTA_SIGNING_CERT:-}" ]]; then
+    exit 0
+fi
+if [[ -z "${OTA_SIGNING_KEY:-}" || -z "${OTA_SIGNING_CERT:-}" ]]; then
+    echo "OTA_SIGNING_KEY and OTA_SIGNING_CERT must both be set" >&2
     exit 1
 fi
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if ! command -v osslsigncode >/dev/null 2>&1; then
+    echo "osslsigncode is required for release signing" >&2
+    exit 1
+fi
+
 output_root="$root/bin/spice2x"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-pfx="$work/signing.pfx"
-if ! printf '%s' "$OTA_SIGNING_PFX" | base64 --decode >"$pfx"; then
-    echo "OTA_SIGNING_PFX is not valid base64" >&2
-    exit 1
-fi
-# Reject malformed PFX files or a public key that does not match the verifier.
-pinned_key_sha1=9ad5080b3935e589f1df340da93b7fa99de6409d
+key="$work/signing-key.pem"
 certificate="$work/signing-cert.pem"
-if ! openssl pkcs12 -in "$pfx" -clcerts -nokeys -passin pass: \
-        -out "$certificate" 2>/dev/null; then
-    openssl pkcs12 -legacy -in "$pfx" -clcerts -nokeys -passin pass: \
-        -out "$certificate" 2>/dev/null || {
-        echo "could not read passwordless OTA signing PFX" >&2
-        exit 1
-    }
-fi
-actual_key_sha1=$(openssl x509 -in "$certificate" -pubkey -noout 2>/dev/null \
-    | openssl pkey -pubin -outform DER 2>/dev/null \
-    | sha1sum | awk '{print $1}') || {
-    echo "could not read passwordless OTA signing PFX" >&2
-    exit 1
-}
-if [[ "$actual_key_sha1" != "$pinned_key_sha1" ]]; then
-    echo "OTA signing PFX public key does not match the pinned release key" >&2
-    exit 1
-fi
+printf '%s\n' "$OTA_SIGNING_KEY" >"$key"
+printf '%s\n' "$OTA_SIGNING_CERT" >"$certificate"
 
 signed_sources=()
 signed_outputs=()
@@ -51,7 +58,7 @@ sign_one() {
     [[ -f "$source" ]] || return 0
 
     local output="$work/signed-${#signed_sources[@]}-$(basename "$source")"
-    if ! osslsigncode sign -pkcs12 "$pfx" -pass "" \
+    if ! osslsigncode sign -certs "$certificate" -key "$key" -pass "" \
             -h sha1 -in "$source" -out "$output" >/dev/null; then
         echo "could not sign $(basename "$source")" >&2
         exit 1

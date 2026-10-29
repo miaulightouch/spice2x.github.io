@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 import hashlib
-import base64
 import os
 from pathlib import Path
 import re
 import shutil
+import shlex
 import stat
 import struct
 import subprocess
@@ -107,6 +107,22 @@ def make_certificate(directory: Path, subject: str) -> tuple[Path, Path]:
     return cert, key
 
 
+def write_env_file(path: Path, key: str | None, certificate: str | None) -> None:
+    values = []
+    if key is not None:
+        values.append(f"OTA_SIGNING_KEY={shlex.quote(key)}")
+    if certificate is not None:
+        values.append(f"OTA_SIGNING_CERT={shlex.quote(certificate)}")
+    path.write_text("\n".join(values) + "\n")
+
+
+def clean_signing_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    for name in ("OTA_SIGNING_KEY", "OTA_SIGNING_CERT"):
+        environment.pop(name, None)
+    return environment
+
+
 def public_key_pin(certificate: Path) -> str:
     public_key = subprocess.check_output([
         "openssl", "x509", "-in", str(certificate), "-pubkey", "-noout",
@@ -118,58 +134,45 @@ def public_key_pin(certificate: Path) -> str:
     return hashlib.sha1(der).hexdigest()
 
 
-def public_key_pin_header(certificate: Path, include_root: Path) -> Path:
-    digest = bytes.fromhex(public_key_pin(certificate))
-    header = include_root / "build" / "ota_public_key.h"
-    header.parent.mkdir(parents=True, exist_ok=True)
-    values = ", ".join(f"0x{byte:02x}" for byte in digest)
-    header.write_text(
-        "#pragma once\n"
-        "#include <array>\n"
-        "#include <cstdint>\n"
-        "namespace ota {\n"
-        f"inline constexpr std::array<std::uint8_t, 20> kPinnedPublicKeySha1 = {{{values}}};\n"
-        "}\n"
-    )
-    return include_root
-
-
-def make_pfx(certificate: Path, key: Path, destination: Path, password: str) -> None:
-    password_file = destination.with_name(f".{destination.name}.password")
-    password_file.write_text(password + "\n")
-    password_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    try:
-        run([
-            "openssl", "pkcs12", "-export", "-inkey", str(key), "-in", str(certificate),
-            "-out", str(destination), "-passout", f"file:{password_file}",
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    finally:
-        password_file.unlink(missing_ok=True)
-    destination.chmod(stat.S_IRUSR | stat.S_IWUSR)
-
-
 def sign_with_osslsigncode(signer: Path, source: Path, destination: Path,
-                           pfx: Path, password: str) -> None:
+                           certificate: Path, key: Path) -> None:
     destination.unlink(missing_ok=True)
-    password_file = destination.with_name(f".{destination.name}.password")
-    password_file.write_text(password + "\n")
-    password_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    try:
-        run([
-            str(signer), "sign", "-pkcs12", str(pfx), "-readpass", str(password_file),
-            "-h", "sha1", "-in", str(source), "-out", str(destination),
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    finally:
-        password_file.unlink(missing_ok=True)
+    run([
+        str(signer), "sign", "-key", str(key), "-certs", str(certificate), "-pass", "",
+        "-h", "sha1", "-in", str(source), "-out", str(destination),
+    ], stdout=subprocess.DEVNULL)
 
 
-def assert_release_pin_matches_script() -> None:
-    header = (ROOT / "build/ota_public_key.h").read_text()
-    array = re.search(r"kPinnedPublicKeySha1\s*=\s*\{([^}]*)\}", header, re.S)
-    script = re.search(r"pinned_key_sha1=([0-9a-fA-F]+)", (ROOT / "sign_release.sh").read_text())
-    assert array and script
+def header_pin(header: Path) -> str:
+    array = re.search(r"kPinnedPublicKeySha1\s*=\s*\{([^}]*)\}",
+                      header.read_text(), re.S)
+    assert array
     pin = "".join(re.findall(r"0x([0-9a-fA-F]{2})", array.group(1))).lower()
-    assert len(pin) == 40 and pin == script.group(1).lower()
+    if not pin.strip():
+        return "0" * 40
+    assert len(pin) == 40
+    return pin
+
+
+def copy_script_root(sandbox: Path) -> Path:
+    script_root = sandbox / "src" / "spice2x"
+    script_root.mkdir(parents=True)
+    shutil.copy2(ROOT / "sign_release.sh", script_root / "sign_release.sh")
+    (script_root / "build").mkdir()
+    shutil.copy2(ROOT / "build/ota_public_key.h", script_root / "build/ota_public_key.h")
+    script = script_root / "sign_release.sh"
+    script.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    return script_root
+
+
+def prepare_header(script_root: Path, key: str | None, certificate: str | None,
+                   environment: dict[str, str] | None = None) -> Path:
+    env_file = script_root.parents[1] / ".env.local"
+    if key is not None or certificate is not None:
+        write_env_file(env_file, key, certificate)
+    environment = environment or clean_signing_environment()
+    run([str(script_root / "sign_release.sh"), "--prepare"], cwd=BUILD, env=environment)
+    return script_root / "build" / "ota_public_key.local.h"
 
 
 def compile_test(include_root: Path) -> Path:
@@ -187,28 +190,57 @@ def compile_test(include_root: Path) -> Path:
     return executable
 
 
-def test_release_archive_update(signed: Path, certificate: Path, key: Path,
-                                pfx: Path) -> None:
+def test_prepare_configuration(certificate: Path, key: Path) -> None:
+    key_text = key.read_text()
+    certificate_text = certificate.read_text()
+    expected = public_key_pin(certificate)
+    with tempfile.TemporaryDirectory(prefix="prepare-script-", dir=BUILD) as temporary:
+        sandbox = Path(temporary)
+
+        from_file = copy_script_root(sandbox / "from-file")
+        generated = prepare_header(from_file, key_text, certificate_text)
+        assert header_pin(generated) == expected
+
+        from_environment = copy_script_root(sandbox / "from-environment")
+        environment = clean_signing_environment()
+        environment.update({"OTA_SIGNING_KEY": key_text, "OTA_SIGNING_CERT": certificate_text})
+        generated = prepare_header(from_environment, None, None, environment)
+        assert header_pin(generated) == expected
+
+        empty = copy_script_root(sandbox / "empty")
+        generated = prepare_header(empty, "", "")
+        assert header_pin(generated) == "0" * 40
+
+        missing = copy_script_root(sandbox / "missing")
+        generated = prepare_header(missing, None, None)
+        assert header_pin(generated) == "0" * 40
+        skipped = subprocess.run(
+            [str(missing / "sign_release.sh")], cwd=BUILD,
+            env=clean_signing_environment(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        assert skipped.returncode == 0
+
+        for name, value in (("OTA_SIGNING_KEY", key_text), ("OTA_SIGNING_CERT", certificate_text)):
+            partial = copy_script_root(sandbox / f"partial-{name.lower()}")
+            partial_environment = clean_signing_environment()
+            partial_environment[name] = value
+            failed = subprocess.run(
+                [str(partial / "sign_release.sh")], cwd=BUILD, env=partial_environment,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            assert failed.returncode != 0
+
+
+def test_release_archive_update(signed: Path, certificate: Path, key: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="release-script-", dir=BUILD) as temporary:
         sandbox = Path(temporary)
-        script_root = sandbox / "src" / "spice2x"
+        script_root = copy_script_root(sandbox)
         output_root = script_root / "bin" / "spice2x"
         dist = script_root / "dist"
         fake_bin = sandbox / "fake-bin"
-        script_root.mkdir(parents=True)
         dist.mkdir()
         fake_bin.mkdir()
-        shutil.copy2(ROOT / "sign_release.sh", script_root / "sign_release.sh")
         script = script_root / "sign_release.sh"
-        script_text = script.read_text()
-        script_text, replacements = re.subn(
-            r"(?m)^pinned_key_sha1=[0-9a-fA-F]+$",
-            f"pinned_key_sha1={public_key_pin(certificate)}",
-            script_text,
-        )
-        assert replacements == 1
-        script.write_text(script_text)
-        script.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
 
         windows_files = [
             output_root / "spice.exe",
@@ -216,6 +248,7 @@ def test_release_archive_update(signed: Path, certificate: Path, key: Path,
             output_root / "spicecfg.exe",
             output_root / "extras" / "largeaddressaware" / "spice.exe",
             output_root / "extras" / "winxp" / "spice.exe",
+            output_root / "extras" / "winxp" / "spice64.exe",
             output_root / "extras" / "winxp" / "spicecfg.exe",
             output_root / "extras" / "linux" / "spice.exe",
             output_root / "extras" / "linux" / "spice64.exe",
@@ -228,8 +261,25 @@ def test_release_archive_update(signed: Path, certificate: Path, key: Path,
         fake_signer = fake_bin / "osslsigncode"
         fake_signer.write_text(
             "#!/usr/bin/env bash\n"
-            "input= output=\n"
-            "while (($#)); do case $1 in -in) input=$2; shift 2;; -out) output=$2; shift 2;; *) shift;; esac; done\n"
+            "set -eu\n"
+            "key= certs= pass= input= output= pass_seen=0\n"
+            "while (($#)); do\n"
+            "    case $1 in\n"
+            "        -key) key=$2; shift 2;;\n"
+            "        -certs) certs=$2; shift 2;;\n"
+            "        -pass) pass_seen=1; pass=$2; shift 2;;\n"
+            "        -in) input=$2; shift 2;;\n"
+            "        -out) output=$2; shift 2;;\n"
+            "        -h) shift 2;;\n"
+            "        *) shift;;\n"
+            "    esac\n"
+            "done\n"
+            "[[ -n \"$key\" && -n \"$certs\" && -n \"$input\" && -n \"$output\" ]]\n"
+            "[[ \"$pass_seen\" == 1 && -z \"$pass\" ]]\n"
+            "[[ -f \"$key\" && -f \"$certs\" ]]\n"
+            "grep -q 'BEGIN .*PRIVATE KEY' \"$key\"\n"
+            "grep -q 'BEGIN CERTIFICATE' \"$certs\"\n"
+            "printf '%s|%s|%s\n' \"$pass_seen\" \"$key\" \"$certs\" >> \"$OTA_TEST_SIGNER_LOG\"\n"
             "[[ -n \"$input\" && -n \"$output\" ]] && cp -p \"$input\" \"$output\"\n",
         )
         fake_signer.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
@@ -244,6 +294,7 @@ def test_release_archive_update(signed: Path, certificate: Path, key: Path,
             **standard_entries,
             "extras/largeaddressaware/spice.exe": b"old laa",
             "extras/winxp/spice.exe": b"old xp 32",
+            "extras/winxp/spice64.exe": b"old xp 64",
             "extras/winxp/spicecfg.exe": b"old xp config",
             "extras/linux/spice.exe": b"old linux 32",
             "extras/linux/spice64.exe": b"old linux 64",
@@ -264,13 +315,18 @@ def test_release_archive_update(signed: Path, certificate: Path, key: Path,
             with ZipFile(archive) as source:
                 original_names[name] = source.namelist()
 
-        environment = {
-            **os.environ,
+        signer_log = sandbox / "signer.log"
+        environment = clean_signing_environment()
+        environment.update({
             "PATH": str(fake_bin) + os.pathsep + os.environ.get("PATH", ""),
-            "OTA_SIGNING_PFX": base64.b64encode(pfx.read_bytes()).decode("ascii"),
-        }
-        environment.pop("OTA_SIGNING_PASSWORD", None)
+            "OTA_SIGNING_KEY": key.read_text(),
+            "OTA_SIGNING_CERT": certificate.read_text(),
+            "OTA_TEST_SIGNER_LOG": str(signer_log),
+        })
         run([str(script)], cwd=script_root, env=environment)
+        signer_calls = signer_log.read_text().splitlines()
+        assert len(signer_calls) == len(windows_files)
+        assert all(call.startswith("1|") for call in signer_calls)
 
         expected = signed.read_bytes()
         for name, entries in archives.items():
@@ -292,22 +348,29 @@ def test_release_archive_update(signed: Path, certificate: Path, key: Path,
                     assert info.file_size == len(data)
                     assert info.CRC == zlib.crc32(data) & 0xffffffff
 
-        protected_pfx = sandbox / "password-protected.pfx"
-        make_pfx(certificate, key, protected_pfx, "fixture-password")
-        protected_environment = dict(environment)
-        protected_environment["OTA_SIGNING_PFX"] = base64.b64encode(protected_pfx.read_bytes()).decode("ascii")
-        protected_environment["OTA_SIGNING_PASSWORD"] = "fixture-password"
-        failed = subprocess.run(
-            [str(script)], cwd=script_root,
-            env=protected_environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        assert failed.returncode != 0
-        for path in windows_files:
-            assert path.read_bytes() == expected
+        before = [path.read_bytes() for path in windows_files]
+        missing_environment = clean_signing_environment()
+        missing_environment.update({
+            "PATH": environment["PATH"],
+            "OTA_TEST_SIGNER_LOG": str(signer_log),
+        })
+        run([str(script)], cwd=script_root, env=missing_environment)
+        assert [path.read_bytes() for path in windows_files] == before
 
-        stale_environment = dict(environment)
-        stale_environment["OTA_SIGNING_PASSWORD"] = "unused-password"
-        run([str(script)], cwd=script_root, env=stale_environment)
+        for name, value in (("OTA_SIGNING_KEY", key.read_text()),
+                            ("OTA_SIGNING_CERT", certificate.read_text())):
+            partial_environment = clean_signing_environment()
+            partial_environment.update({
+                "PATH": environment["PATH"],
+                "OTA_TEST_SIGNER_LOG": str(signer_log),
+                name: value,
+            })
+            failed = subprocess.run(
+                [str(script)], cwd=script_root, env=partial_environment,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            assert failed.returncode != 0
+            assert [path.read_bytes() for path in windows_files] == before
 
 
 def main() -> int:
@@ -320,20 +383,20 @@ def main() -> int:
 
     os.umask(0o077)
     BUILD.mkdir(parents=True, exist_ok=True)
-    assert_release_pin_matches_script()
     signer = Path(os.environ.get(
         "OTA_TEST_SIGNER", str(BUILD / "osslsigncode-build" / "osslsigncode")
     ))
     with tempfile.TemporaryDirectory(prefix="fixture-", dir=BUILD) as temporary:
         fixture = Path(temporary)
         cert, key = make_certificate(fixture, "/C=TW/O=Fixture/CN=OTA Fixture")
-        pfx = fixture / "signing.pfx"
-        make_pfx(cert, key, pfx, "")
-        include_root = public_key_pin_header(cert, fixture / "include")
+        include_root = copy_script_root(fixture)
+        generated = prepare_header(include_root, key.read_text(), cert.read_text())
+        assert header_pin(generated) == public_key_pin(cert)
         executable = compile_test(include_root)
         unsigned = BUILD / "unsigned.exe"
         shutil.copy2(executable, unsigned)
         command = ["wine", str(executable), str(unsigned), "unsigned"]
+        test_prepare_configuration(cert, key)
 
         if not signer.is_file():
             print("XP compile passed; osslsigncode unavailable; genuine signed runtime skipped")
@@ -341,8 +404,8 @@ def main() -> int:
             return 0
 
         signed = BUILD / "signed-real.exe"
-        sign_with_osslsigncode(signer, unsigned, signed, pfx, "")
-        test_release_archive_update(signed, cert, key, pfx)
+        sign_with_osslsigncode(signer, unsigned, signed, cert, key)
+        test_release_archive_update(signed, cert, key)
         mutated_code = BUILD / "mutated-code.exe"
         mutated_pkcs7 = BUILD / "mutated-pkcs7.exe"
         mutate_code(signed, mutated_code)
@@ -353,10 +416,8 @@ def main() -> int:
         wrong_cert, wrong_key = make_certificate(
             wrong_fixture, "/C=TW/O=Other/CN=Other OTA Test"
         )
-        wrong_pfx = wrong_fixture / "signing.pfx"
-        make_pfx(wrong_cert, wrong_key, wrong_pfx, "wrong-password")
         wrong = BUILD / "wrong-signer.exe"
-        sign_with_osslsigncode(signer, unsigned, wrong, wrong_pfx, "wrong-password")
+        sign_with_osslsigncode(signer, unsigned, wrong, wrong_cert, wrong_key)
         command.extend([
             str(signed), "verified", str(mutated_code), "invalid",
             str(mutated_pkcs7), "invalid", str(wrong), "untrusted",

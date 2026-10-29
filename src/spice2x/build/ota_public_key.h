@@ -3,11 +3,10 @@
 #include <array>
 #include <cstdint>
 
+#if __has_include("build/ota_public_key.local.h")
+#include "build/ota_public_key.local.h"
+#else
 namespace ota {
-    // SHA-1 of the DER SubjectPublicKeyInfo for the release signing key.
-    inline constexpr std::array<std::uint8_t, 20> kPinnedPublicKeySha1 = {
-        0x9a, 0xd5, 0x08, 0x0b, 0x39, 0x35, 0xe5, 0x89,
-        0xf1, 0xdf, 0x34, 0x0d, 0xa9, 0x3b, 0x7f, 0xa9,
-        0x9d, 0xe6, 0x40, 0x9d,
-    };
+    inline constexpr std::array<std::uint8_t, 20> kPinnedPublicKeySha1{};
 }
+#endif
