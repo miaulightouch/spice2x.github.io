@@ -61,6 +61,7 @@ int main() {
     const auto main_image = pe(0x8664, 0x20b);
     const auto wrong_main_image = pe(0x14c, 0x10b);
     const auto config_image = pe(0x14c, 0x10b);
+    assert(ota::current_update_id().empty());
     (void) ota::executable_crc32();
 
     expect_failure([&] {
