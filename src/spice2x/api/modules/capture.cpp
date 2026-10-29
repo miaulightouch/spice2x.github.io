@@ -9,6 +9,9 @@
 #include "external/rapidjson/document.h"
 #include "hooks/graphics/graphics.h"
 #include "hooks/graphics/jpeg_encoder.h"
+#ifdef SPICE_OPENGL_PROBE
+#include "hooks/graphics/backends/opengl/opengl_backend.h"
+#endif
 #include "util/crypt.h"
 
 using namespace std::placeholders;
@@ -75,7 +78,32 @@ namespace api::modules {
         functions["get_screens"] = std::bind(&Capture::get_screens, this, _1, _2);
         functions["get_jpg"] = std::bind(&Capture::get_jpg, this, _1, _2);
         functions["get_streams"] = std::bind(&Capture::get_streams, this, _1, _2);
+#ifdef SPICE_OPENGL_PROBE
+        functions["opengl_probe"] = std::bind(&Capture::opengl_probe, this, _1, _2);
+        require_password("opengl_probe");
+#endif
     }
+
+#ifdef SPICE_OPENGL_PROBE
+    void Capture::opengl_probe(Request &req, Response &res) {
+        if (req.params.Size() > 2 || (req.params.Size() && !req.params[0].IsString()) ||
+                (req.params.Size() > 1 && !req.params[1].IsBool())) {
+            return error(res, "expected [mode=legacy|shader|shader-pbo, reset=false]");
+        }
+        const std::string_view mode = req.params.Size() ?
+                std::string_view(req.params[0].GetString(), req.params[0].GetStringLength()) : "";
+        if (!mode.empty() && mode != "legacy" && mode != "shader" && mode != "shader-pbo") {
+            return error(res, "mode must be legacy, shader or shader-pbo");
+        }
+        const auto report = graphics_opengl_probe(mode, req.params.Size() > 1 && req.params[1].GetBool());
+        Document parsed;
+        parsed.Parse(report.c_str());
+        if (parsed.HasParseError() || !parsed.IsObject()) return error(res, "OpenGL probe report unavailable");
+        Value data;
+        data.CopyFrom(parsed, res.doc()->GetAllocator());
+        res.add_data(data);
+    }
+#endif
 
     /**
      * get_screens()
