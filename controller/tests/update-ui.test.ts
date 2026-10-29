@@ -161,6 +161,14 @@ test('system update clears a socket upload id before allowing a fresh upload aft
     assert.equal(flow.beginCalls, 1);
     assert.equal(findNodes(root, node => node.type === 'input')[0]!.props.disabled, true);
 
+    clickButton(root, /Cancel|取消|キャンセル|취소/);
+    await settle();
+    assert.equal(findNodes(root, node => node.type === 'input')[0]!.props.disabled, false);
+    clickButton(root, /Upload files|上傳檔案|上传文件|ファイルをアップロード|파일 업로드/);
+    await settle();
+    assert.equal(flow.beginCalls, 2);
+    assert.equal(findNodes(root, node => node.type === 'input')[0]!.props.disabled, true);
+
     props.connected = false;
     flow.connected.value = false;
     flow.connection.value = 'disconnected';
@@ -175,7 +183,7 @@ test('system update clears a socket upload id before allowing a fresh upload aft
     await settle();
     clickButton(root, /Upload files|上傳檔案|上传文件|ファイルをアップロード|파일 업로드/);
     await settle();
-    assert.equal(flow.beginCalls, 2);
+    assert.equal(flow.beginCalls, 3);
     app.unmount();
   } finally { await server.close(); }
 });

@@ -116,7 +116,7 @@ async function upload(): Promise<void> {
       progress: (sent, file) => { if (token === operation) progress.value = { ...progress.value, sent, file }; },
     });
     if (token !== operation) return;
-    if (!finished) { phase.value = 'idle'; return; }
+    if (!finished) { phase.value = selected.value?.length ? 'ready' : 'idle'; return; }
     result.value = finished; phase.value = 'ready';
   } catch (error) {
     if (error instanceof UpdateUploadCleanupError) {
@@ -126,11 +126,11 @@ async function upload(): Promise<void> {
     }
     if (token !== operation) {
       if (error instanceof UpdateUploadCancelled) {
-        phase.value = 'idle'; uploadId.value = ''; result.value = undefined; progress.value = { sent: 0, total: 0, file: '' };
+        phase.value = selected.value?.length ? 'ready' : 'idle'; uploadId.value = ''; result.value = undefined; progress.value = { sent: 0, total: 0, file: '' }; localError.value = '';
       }
       return;
     }
-    localError.value = error instanceof Error ? error.message : String(error); phase.value = 'idle'; uploadId.value = '';
+    localError.value = error instanceof Error ? error.message : String(error); phase.value = selected.value?.length ? 'ready' : 'idle'; uploadId.value = '';
   }
 }
 
@@ -145,18 +145,22 @@ async function cancel(): Promise<boolean> {
   const active = phase.value === 'uploading' || phase.value === 'finishing';
   operation++;
   if (!id) {
-    phase.value = 'idle'; result.value = undefined; progress.value = { sent: 0, total: 0, file: '' };
+    phase.value = selected.value?.length ? 'ready' : 'idle'; result.value = undefined; progress.value = { sent: 0, total: 0, file: '' }; localError.value = '';
     return true;
   }
   if (active && uploadTask) {
     phase.value = 'cancelling';
     await uploadTask;
-    return !uploadId.value;
+    if (!uploadId.value) {
+      phase.value = selected.value?.length ? 'ready' : 'idle'; localError.value = '';
+      return true;
+    }
+    return false;
   }
   if (props.connected) {
     while (c.busy.value && props.connected) await new Promise(resolve => setTimeout(resolve, 20));
     if (props.connected && await c.cancelUpdate(id)) {
-      phase.value = 'idle'; uploadId.value = ''; result.value = undefined; progress.value = { sent: 0, total: 0, file: '' };
+      phase.value = selected.value?.length ? 'ready' : 'idle'; uploadId.value = ''; result.value = undefined; progress.value = { sent: 0, total: 0, file: '' }; localError.value = '';
       return true;
     }
   }
