@@ -22,6 +22,7 @@
 #include "external/hash-library/sha1.h"
 #include "overlay/notifications.h"
 #include "util/crypt.h"
+#include "util/ota_update.h"
 #include "util/logging.h"
 
 namespace api {
@@ -537,6 +538,7 @@ namespace api {
         });
 
         log_info("api::websocket", "server listening on port: {}", port);
+        ota::acknowledge_update();
     }
 
     WebSocketController::~WebSocketController() {

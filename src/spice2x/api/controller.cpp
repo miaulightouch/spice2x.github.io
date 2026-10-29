@@ -35,6 +35,7 @@
 #include "modules/sdvx.h"
 #include "modules/touch.h"
 #include "modules/resize.h"
+#include "modules/update.h"
 #include "request.h"
 #include "response.h"
 
@@ -429,6 +430,7 @@ void Controller::init_state(api::ClientState *state) {
     state->modules.push_back(new modules::SDVX());
     state->modules.push_back(new modules::Touch());
     state->modules.push_back(new modules::Resize());
+    state->modules.push_back(new modules::Update());
 
     CLIENT_COUNT.fetch_add(1, std::memory_order_relaxed);
 }

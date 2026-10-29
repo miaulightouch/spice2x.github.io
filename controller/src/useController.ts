@@ -17,6 +17,8 @@ import type {
   CardManagerState, GameList, IoAnalog, IoButton, IoLight, OptionsState, PatchState, KeypadCapabilities, OptionElement,
 } from './api/features';
 import { validateIoPulse } from './api/io';
+import { parseUpdateApply, parseUpdateBegin, parseUpdateChunk, parseUpdateFinish, parseUpdateStatus } from './api/update';
+import type { UpdateEntry, UpdateResult, UpdateStatus } from './api/update';
 
 export type MemoryState = {
   mem_total: number;
@@ -70,6 +72,8 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
   const avsInfo = ref<Record<string, string>>({});
   const launcherInfo = ref<Record<string, string>>({});
   const configuredPassword = ref(false);
+  const updateStatus = ref<UpdateStatus>();
+  const updateError = textRef();
   const logText = ref('');
   const logSize = ref(0);
   const games = ref<GameList>();
@@ -119,6 +123,7 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     avsInfo.value = {}; launcherInfo.value = {};
     game.value = ''; version.value = ''; memory.value = undefined;
     configuredPassword.value = false; applying.value = false; unsaved.value = false;
+    updateStatus.value = undefined; updateError.value = '';
     coinQueue.value = undefined; activeProfile = undefined; resizeApplyError = undefined;
     logText.value = ''; logSize.value = 0;
     games.value = undefined; options.value = undefined; patches.value = undefined; cardManager.value = undefined;
@@ -147,6 +152,11 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
       await load(epoch);
       if (epoch === generation && next.status === 'connected') notify(msg('msg.connected', { name: profile.name }));
     } catch (value) { if (epoch === generation) report(value); }
+  }
+
+  async function reconnect(): Promise<void> {
+    if (!activeProfile) return;
+    await connect({ ...activeProfile });
   }
 
   async function startDemo(): Promise<void> {
@@ -495,6 +505,88 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
     } catch (value) { featureFailure('status', value, request); }
   }
 
+  async function readUpdateStatus(): Promise<UpdateStatus | undefined> {
+    if (demo.value || !connected.value || !api.value) {
+      updateStatus.value = undefined;
+      updateError.value = demo.value ? msg('error.updateDemo') : msg('error.connectFirst');
+      return undefined;
+    }
+    if (!configuredPassword.value) {
+      updateStatus.value = undefined;
+      updateError.value = msg('error.updatePassword');
+      return undefined;
+    }
+    const epoch = generation;
+    updateError.value = '';
+    try {
+      const value = parseUpdateStatus(await api.value.request('update', 'status'));
+      if (epoch !== generation) return undefined;
+      updateStatus.value = value;
+      return value;
+    } catch (value) {
+      if (epoch === generation) { updateStatus.value = undefined; updateError.value = errorText(value); }
+      return undefined;
+    }
+  }
+
+  async function beginUpdate(entries: UpdateEntry[]): Promise<string | undefined> {
+    if (!connected.value || !api.value || demo.value) { report(new LocalizedError('error.updateUnavailable')); return undefined; }
+    if (!configuredPassword.value) { report(new LocalizedError('error.updatePassword')); return undefined; }
+    if (!entries.length) { report(new LocalizedError('error.updateNoFiles')); return undefined; }
+    const epoch = generation;
+    let id: string | undefined;
+    await action('update-begin', async () => {
+      id = parseUpdateBegin(await api.value!.request('update', 'begin', [entries.map(({ name, size, crc32 }) => ({ name, size, crc32 }))]));
+      if (epoch !== generation) id = undefined;
+    });
+    return id;
+  }
+
+  async function updateChunk(id: string, name: string, offset: number, base64: string): Promise<number | undefined> {
+    if (!id || !connected.value || !api.value || demo.value) { report(new LocalizedError('error.updateUnavailable')); return undefined; }
+    const epoch = generation;
+    let received: number | undefined;
+    await action('update-chunk', async () => {
+      received = parseUpdateChunk(await api.value!.request('update', 'chunk', [id, name, offset, base64]));
+      if (epoch !== generation) received = undefined;
+    });
+    return received;
+  }
+
+  async function finishUpdate(id: string): Promise<UpdateResult | undefined> {
+    if (!id || !connected.value || !api.value || demo.value) { report(new LocalizedError('error.updateUnavailable')); return undefined; }
+    const epoch = generation;
+    let result: UpdateResult | undefined;
+    await action('update-finish', async () => {
+      result = parseUpdateFinish(await api.value!.request('update', 'finish', [id]));
+      if (epoch !== generation) result = undefined;
+    });
+    return result;
+  }
+
+  async function applyUpdate(id: string): Promise<boolean> {
+    if (!id || !connected.value || !api.value || demo.value) { report(new LocalizedError('error.updateUnavailable')); return false; }
+    if (!configuredPassword.value) { report(new LocalizedError('error.updatePassword')); return false; }
+    const epoch = generation;
+    let restarting = false;
+    await action('update-apply', async () => {
+      restarting = parseUpdateApply(await api.value!.request('update', 'apply', [id]));
+      if (epoch !== generation) restarting = false;
+    });
+    return restarting;
+  }
+
+  async function cancelUpdate(id: string): Promise<boolean> {
+    if (!id || !connected.value || !api.value || demo.value) return false;
+    const epoch = generation;
+    let cancelled = false;
+    await action('update-cancel', async () => {
+      await api.value!.request('update', 'cancel', [id]);
+      cancelled = epoch === generation;
+    });
+    return cancelled;
+  }
+
   function featureRequestCurrent(request: FeatureRequest): boolean {
     return request.epoch === generation && latestFeatureRequests.get(request.key) === request.id;
   }
@@ -777,7 +869,8 @@ export function useController(createDemoApi: () => Rpc = () => new DemoApi()) {
 
   return { status, demo, message, error, busy, latency, game, version, memory, buttons, coinQueue, resize, resizeError,
     applying, unsaved, image, imageTime, capturing, captureScreens, selectedCaptureScreen, captureFrame, captureError,
-    configuredPassword, connected,
+    configuredPassword, connected, reconnect,
+    updateStatus, updateError, readUpdateStatus, beginUpdate, updateChunk, finishUpdate, applyUpdate, cancelUpdate,
     connect, startDemo, disconnect, notify, report, updateResize, selectScene, readResize, saveResize,
     machineControl, pulse, exactButton, releaseButtons, insertCoin, insertCard, getMachineCards, keypad, capture,
     captureScreen, readCaptureScreens, streams, streamUrl, startStream, stopStream,

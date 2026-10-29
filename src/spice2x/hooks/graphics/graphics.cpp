@@ -68,19 +68,38 @@ static std::vector<WNDPROC> WNDPROC_CUSTOM {};
 static std::atomic<bool> GRAPHICS_SCREENSHOT_TRIGGER {false};
 static std::set<int> GRAPHICS_SCREENS { 0 };
 static std::mutex GRAPHICS_SCREENS_M {};
+#ifdef SPICE_OPENGL_PROBE
+struct GraphicsCaptureRequest {
+    int screen;
+    uint64_t request_id;
+};
+static std::vector<GraphicsCaptureRequest> GRAPHICS_CAPTURE_SCREENS;
+#else
 static std::vector<int> GRAPHICS_CAPTURE_SCREENS;
+#endif
 static std::mutex GRAPHICS_CAPTURE_SCREENS_M {};
 static CaptureData GRAPHICS_CAPTURE_BUFFER[GRAPHICS_CAPTURE_SCREEN_NO] {};
 static std::mutex GRAPHICS_CAPTURE_BUFFER_M[GRAPHICS_CAPTURE_SCREEN_NO] {};
 static std::condition_variable GRAPHICS_CAPTURE_CV[GRAPHICS_CAPTURE_SCREEN_NO] {};
 static bool GRAPHICS_CAPTURE_SKIP_SIGNAL[GRAPHICS_CAPTURE_SCREEN_NO] {};
 static constexpr std::chrono::milliseconds GRAPHICS_CAPTURE_RECEIVE_TIMEOUT {2000};
+#ifdef SPICE_OPENGL_PROBE
+static std::atomic<uint64_t> GRAPHICS_CAPTURE_GENERATION[GRAPHICS_CAPTURE_SCREEN_NO] {};
+#endif
 
+#ifdef SPICE_OPENGL_PROBE
+static void graphics_capture_cancel_pending(int screen, uint64_t request_id) {
+#else
 static void graphics_capture_cancel_pending(int screen) {
+#endif
     std::lock_guard<std::mutex> lock(GRAPHICS_CAPTURE_SCREENS_M);
 
     for (auto it = GRAPHICS_CAPTURE_SCREENS.rbegin(); it != GRAPHICS_CAPTURE_SCREENS.rend(); ++it) {
+#ifdef SPICE_OPENGL_PROBE
+        if (it->screen == screen && (!request_id || it->request_id == request_id)) {
+#else
         if (*it == screen) {
+#endif
             GRAPHICS_CAPTURE_SCREENS.erase(std::next(it).base());
             return;
         }
@@ -1499,12 +1518,52 @@ bool graphics_screenshot_consume() {
 }
 
 void graphics_capture_trigger(int screen) {
-    std::lock_guard<std::mutex> lock(GRAPHICS_CAPTURE_SCREENS_M);
+#ifdef SPICE_OPENGL_PROBE
+    if (screen < 0 || screen >= static_cast<int>(GRAPHICS_CAPTURE_SCREEN_NO)) {
+        return;
+    }
+#endif
+    {
+        std::lock_guard<std::mutex> lock(GRAPHICS_CAPTURE_SCREENS_M);
 
-    GRAPHICS_CAPTURE_SCREENS.push_back(screen);
+#ifdef SPICE_OPENGL_PROBE
+        std::lock_guard<std::mutex> buffer_lock(GRAPHICS_CAPTURE_BUFFER_M[screen]);
+        const auto request_id = GRAPHICS_CAPTURE_GENERATION[screen].fetch_add(1) + 1;
+        auto &capture = GRAPHICS_CAPTURE_BUFFER[screen];
+        capture.data.reset();
+        GRAPHICS_CAPTURE_SKIP_SIGNAL[screen] = false;
+        GRAPHICS_CAPTURE_SCREENS.push_back({screen, request_id});
+#else
+        GRAPHICS_CAPTURE_SCREENS.push_back(screen);
+#endif
+    }
+#ifdef SPICE_OPENGL_PROBE
+    GRAPHICS_CAPTURE_CV[screen].notify_one();
+#endif
 }
 
+#ifdef SPICE_OPENGL_PROBE
+bool graphics_capture_consume_request(int *screen, uint64_t *request_id) {
+    std::lock_guard<std::mutex> lock(GRAPHICS_CAPTURE_SCREENS_M);
+
+    if (GRAPHICS_CAPTURE_SCREENS.empty()) {
+        return false;
+    }
+
+    const auto request = GRAPHICS_CAPTURE_SCREENS.back();
+    GRAPHICS_CAPTURE_SCREENS.pop_back();
+    *screen = request.screen;
+    if (request_id) {
+        *request_id = request.request_id;
+    }
+    return true;
+}
+#endif
+
 bool graphics_capture_consume(int *screen) {
+#ifdef SPICE_OPENGL_PROBE
+    return graphics_capture_consume_request(screen, nullptr);
+#else
     std::lock_guard<std::mutex> lock(GRAPHICS_CAPTURE_SCREENS_M);
 
     if (GRAPHICS_CAPTURE_SCREENS.empty()) {
@@ -1514,7 +1573,59 @@ bool graphics_capture_consume(int *screen) {
     *screen = GRAPHICS_CAPTURE_SCREENS.back();
     GRAPHICS_CAPTURE_SCREENS.pop_back();
     return true;
+#endif
 }
+
+#ifdef SPICE_OPENGL_PROBE
+bool graphics_capture_request_active(int screen, uint64_t request_id) {
+    return screen >= 0 && screen < static_cast<int>(GRAPHICS_CAPTURE_SCREEN_NO)
+        && request_id
+        && GRAPHICS_CAPTURE_GENERATION[screen].load() == request_id;
+}
+
+bool graphics_capture_enqueue_request(int screen, uint64_t request_id,
+        std::shared_ptr<uint8_t[]> data, size_t width, size_t height) {
+    if (screen < 0 || screen >= static_cast<int>(GRAPHICS_CAPTURE_SCREEN_NO) || !request_id) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(GRAPHICS_CAPTURE_BUFFER_M[screen]);
+        if (GRAPHICS_CAPTURE_GENERATION[screen].load() != request_id) {
+            return false;
+        }
+
+        GRAPHICS_CAPTURE_SKIP_SIGNAL[screen] = false;
+        auto &capture = GRAPHICS_CAPTURE_BUFFER[screen];
+        capture.data = std::move(data);
+        capture.width = width;
+        capture.height = height;
+        capture.timestamp = get_performance_milliseconds();
+    }
+    GRAPHICS_CAPTURE_CV[screen].notify_one();
+    return true;
+}
+
+bool graphics_capture_skip_request(int screen, uint64_t request_id) {
+    if (screen < 0 || screen >= static_cast<int>(GRAPHICS_CAPTURE_SCREEN_NO) || !request_id) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(GRAPHICS_CAPTURE_BUFFER_M[screen]);
+        if (GRAPHICS_CAPTURE_GENERATION[screen].load() != request_id) {
+            return false;
+        }
+
+        GRAPHICS_CAPTURE_GENERATION[screen].fetch_add(1);
+        auto &capture = GRAPHICS_CAPTURE_BUFFER[screen];
+        capture.data.reset();
+        GRAPHICS_CAPTURE_SKIP_SIGNAL[screen] = true;
+    }
+    GRAPHICS_CAPTURE_CV[screen].notify_one();
+    return true;
+}
+#endif
 
 void graphics_capture_enqueue(int screen, uint8_t *data, size_t width, size_t height) {
     graphics_capture_enqueue(screen, std::shared_ptr<uint8_t[]>(data), width, height);
@@ -1577,6 +1688,17 @@ bool graphics_capture_receive_raw(int screen, std::shared_ptr<uint8_t[]> &out,
 
     // wait for capture event (with timeout)
     std::unique_lock<std::mutex> lock(GRAPHICS_CAPTURE_BUFFER_M[screen]);
+#ifdef SPICE_OPENGL_PROBE
+    const auto request_id = GRAPHICS_CAPTURE_GENERATION[screen].load();
+    const bool ready = GRAPHICS_CAPTURE_CV[screen].wait_for(
+            lock,
+            GRAPHICS_CAPTURE_RECEIVE_TIMEOUT,
+            [screen, request_id] {
+                return GRAPHICS_CAPTURE_BUFFER[screen].data != nullptr
+                    || GRAPHICS_CAPTURE_SKIP_SIGNAL[screen]
+                    || GRAPHICS_CAPTURE_GENERATION[screen].load() != request_id;
+            });
+#else
     const bool ready = GRAPHICS_CAPTURE_CV[screen].wait_for(
             lock,
             GRAPHICS_CAPTURE_RECEIVE_TIMEOUT,
@@ -1584,12 +1706,27 @@ bool graphics_capture_receive_raw(int screen, std::shared_ptr<uint8_t[]> &out,
                 return GRAPHICS_CAPTURE_BUFFER[screen].data != nullptr
                     || GRAPHICS_CAPTURE_SKIP_SIGNAL[screen];
             });
+#endif
 
     if (!ready) {
+#ifdef SPICE_OPENGL_PROBE
+        GRAPHICS_CAPTURE_GENERATION[screen].fetch_add(1);
+#endif
         lock.unlock();
+#ifdef SPICE_OPENGL_PROBE
+        graphics_capture_cancel_pending(screen, request_id);
+#else
         graphics_capture_cancel_pending(screen);
+#endif
         return false;
     }
+
+#ifdef SPICE_OPENGL_PROBE
+    if (GRAPHICS_CAPTURE_GENERATION[screen].load() != request_id) {
+        lock.unlock();
+        return false;
+    }
+#endif
 
     if (GRAPHICS_CAPTURE_SKIP_SIGNAL[screen]) {
         GRAPHICS_CAPTURE_SKIP_SIGNAL[screen] = false;

@@ -11,6 +11,8 @@ cmake-build*
 # user config
 build_all.local.sh
 build_docker.local.sh
+/.env.local
+/src/spice2x/build/ota_public_key.local.h
 
 # Fork build output and private runtime/verification records
 /build/

@@ -242,6 +242,8 @@ if(SPICE_XP)
     add_compile_definitions(SPICE_XP=1)
 endif()
 
+option(SPICE_OPENGL_PROBE "Build cabinet OpenGL comparison diagnostics" OFF)
+
 # acioemu log
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DACIOEMU_LOG")
 
@@ -514,6 +516,7 @@ set(SOURCE_FILES ${SOURCE_FILES}
         api/modules/memory.cpp
         api/modules/coin.cpp
         api/modules/info.cpp
+        api/modules/update.cpp
         api/modules/keypads.cpp
         api/modules/control.cpp
         api/modules/touch.cpp
@@ -902,11 +905,23 @@ set(SOURCE_FILES ${SOURCE_FILES}
         util/dependencies.cpp
         util/deferlog.cpp
         util/socd_cleaner.cpp
+        util/ota_signature.cpp
+        util/ota_update.cpp
 )
 
 list(APPEND SOURCE_FILES
         hooks/graphics/backends/opengl/opengl_backend.cpp
         hooks/graphics/backends/opengl/opengl_resize.cpp)
+if(SPICE_OPENGL_PROBE)
+    list(APPEND SOURCE_FILES hooks/graphics/backends/opengl/opengl_probe.cpp)
+    set_source_files_properties(
+            hooks/graphics/backends/opengl/opengl_backend.cpp
+            hooks/graphics/backends/opengl/opengl_probe.cpp
+            api/modules/capture.cpp
+            hooks/graphics/graphics.cpp
+            PROPERTIES COMPILE_DEFINITIONS
+            "SPICE_OPENGL_PROBE=1;SPICE_OPENGL_PROBE_REVISION=\"${SPICE_CONTROLLER_GIT_VERSION}\"")
+endif()
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} PREFIX "Source Files" FILES ${SOURCE_FILES})
 
@@ -1077,6 +1092,11 @@ target_compile_definitions(spicetools_cfg_linux PRIVATE NO_SCARD=1 PRIVATE SPICE
 if(NOT MSVC)
     set_target_properties(spicetools_cfg_linux PROPERTIES COMPILE_FLAGS "-m32" LINK_FLAGS "-m32")
 endif()
+
+foreach(target spicetools_spice_objs spicetools_spice_linux spicetools_spice64
+        spicetools_spice64_linux spicetools_cfg spicetools_cfg_linux)
+    target_link_libraries(${target} PRIVATE crypt32 advapi32)
+endforeach()
 
 # stubs
 #######

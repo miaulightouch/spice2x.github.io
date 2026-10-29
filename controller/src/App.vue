@@ -2,6 +2,8 @@
 import { t, msg, locale, languages, setLocale, LocalizedError } from './i18n';
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import IoPanel from './components/IoPanel.vue';
+import CapturePlayer from './components/CapturePlayer.vue';
+import SystemUpdate from './components/SystemUpdate.vue';
 import { useController } from './useController';
 import { isRecord, normalizeEndpoint } from './api/client';
 import { EMBEDDED_PROFILE_ID, embeddedWebSocketEndpoint, isEmbeddedBuild, isEmbeddedProfile } from './mode';
@@ -445,7 +447,7 @@ onBeforeUnmount(() => {
     <div v-if="demo" class="demo-strip">{{ t('connection.demoStrip') }}<button class="text-button" @click="c.disconnect(); tab = 'connection'">{{ t('connection.connect') }}</button></div>
     <div v-if="offline" class="offline-strip">{{ t('connection.offline') }}</div>
     <nav class="main-nav" :aria-label="t('nav.label')">
-      <button v-for="item in [{ key: 'io', label: t('nav.io'), symbol: '◌' }, { key: 'settings', label: t('nav.settings'), symbol: '☷' }, { key: 'keypad', label: t('nav.keypad'), symbol: '⌨' }, { key: 'cards', label: t('nav.cards'), symbol: '▤' }, { key: 'log', label: t('nav.log'), symbol: '▥' }, { key: 'control', label: t('nav.control'), symbol: '◉' }, { key: 'patches', label: t('nav.patches'), symbol: '⚙' }, { key: 'resize', label: t('nav.resize'), symbol: '▦' }, { key: 'preview', label: t('nav.screen'), symbol: '▣' }, { key: 'status', label: t('nav.status'), symbol: '⌁' }]" :key="item.key" :aria-pressed="tab === item.key" @click="selectTab(item.key)"><span aria-hidden="true">{{ item.symbol }}</span>{{ item.label }}</button>
+      <button v-for="item in [{ key: 'io', label: t('nav.io'), symbol: '◌' }, { key: 'settings', label: t('nav.settings'), symbol: '☷' }, { key: 'keypad', label: t('nav.keypad'), symbol: '⌨' }, { key: 'cards', label: t('nav.cards'), symbol: '▤' }, { key: 'log', label: t('nav.log'), symbol: '▥' }, { key: 'control', label: t('nav.control'), symbol: '◉' }, { key: 'patches', label: t('nav.patches'), symbol: '⚙' }, { key: 'resize', label: t('nav.resize'), symbol: '▦' }, { key: 'preview', label: t('nav.screen'), symbol: '▣' }, { key: 'status', label: t('nav.status'), symbol: '⌁' }, { key: 'update', label: t('nav.update'), symbol: '⇧' }]" :key="item.key" :aria-pressed="tab === item.key" @click="selectTab(item.key)"><span aria-hidden="true">{{ item.symbol }}</span>{{ item.label }}</button>
     </nav>
     <main class="main-content">
       <section v-show="tab === 'settings'" aria-labelledby="options-title">
@@ -623,11 +625,10 @@ onBeforeUnmount(() => {
           <label class="stacked-field">{{ t('preview.quality') }}<input v-model.number="captureQuality" type="number" min="1" max="100" step="1" :disabled="capturing || !!streamUrl"></label>
           <label class="stacked-field">{{ t('preview.size') }}<select :value="streamUrl ? 1 : captureDivide" :disabled="capturing || !!streamUrl" @change="captureDivide = Number(($event.target as HTMLSelectElement).value)"><option :value="1">{{ t('preview.fullSize') }}</option><option :value="2">1/2</option><option :value="4">1/4</option><option :value="8">1/8</option></select></label>
           <label class="stacked-field">{{ t('preview.fps') }}<input v-model.number="captureFps" type="number" min="1" max="60" step="1" :disabled="!!streamUrl"></label>
-          <button :disabled="!connected || demo || !!busy || capturing" @click="streamUrl ? stopPreview() : startStream()">{{ t(streamUrl ? 'preview.stop' : 'preview.stream') }}</button>
         </div>
         <p class="muted small">{{ t(streamUrl ? 'preview.streamHint' : 'preview.hint') }}</p>
         <p v-if="captureError" class="error-text" role="alert">{{ captureError }}</p>
-        <div class="capture-viewer"><img v-show="streamUrl" :src="streamUrl || undefined" :alt="t('preview.title')" @error="streamFailed"><img v-if="!streamUrl && image" :src="image" :alt="t('screen.capture')"><p v-else-if="!streamUrl" class="muted small">{{ t('preview.empty') }}</p></div>
+        <CapturePlayer :stream-url="streamUrl" :stream-pending="busy === 'stream'" :image="image" :play-disabled="!connected || demo || !!busy || capturing" :active="tab === 'preview' && connected" @play="startStream" @stop="stopPreview" @error="streamFailed" />
         <p v-if="captureFrame && !streamUrl" class="muted small numeric">{{ captureFrame.width }} × {{ captureFrame.height }} · {{ imageTime }}</p>
       </section>
       <section v-show="tab === 'connection'" aria-labelledby="system-title">
@@ -654,6 +655,9 @@ onBeforeUnmount(() => {
           <div class="settings-panel"><h2>{{ t('status.connection') }}</h2><dl class="status-list"><div><dt>{{ t('status.game') }}</dt><dd>{{ game || '—' }}</dd></div><div><dt>{{ t('status.gameIdentifier') }}</dt><dd>{{ [avsInfo.model, avsInfo.dest, avsInfo.spec, avsInfo.rev, avsInfo.ext].filter(Boolean).join(':') || '—' }}</dd></div><div><dt>{{ t('status.services') }}</dt><dd>{{ avsInfo.services || '—' }}</dd></div><div><dt>{{ t('status.version') }}</dt><dd>{{ version || '—' }}</dd></div><div><dt>{{ t('status.buildDate') }}</dt><dd>{{ [launcherInfo.compile_date, launcherInfo.compile_time].filter(Boolean).join(' ') || '—' }}</dd></div><div><dt>{{ t('status.systemTime') }}</dt><dd>{{ launcherInfo.system_time || '—' }}</dd></div><div><dt>{{ t('status.latency') }}</dt><dd>{{ latency ? `${latency} ms` : '—' }}</dd></div></dl></div>
           <div class="settings-panel"><h2>{{ t('status.memory') }}</h2><dl class="status-list"><div><dt>{{ t('status.processMemory') }} · {{ t('status.memoryUsed') }}</dt><dd>{{ memory ? formatBytes(memory.mem_used) : '—' }}</dd></div><div><dt>{{ t('status.processMemory') }} · {{ t('status.virtualUsed') }}</dt><dd>{{ memory ? formatBytes(memory.vmem_used) : '—' }}</dd></div><div><dt>{{ t('status.systemMemory') }} · {{ t('status.memoryUsed') }}</dt><dd>{{ memory ? formatBytes(memory.mem_total_used) : '—' }} / {{ memory ? formatBytes(memory.mem_total) : '—' }}</dd></div><div><dt>{{ t('status.systemMemory') }} · {{ t('status.virtualUsed') }}</dt><dd>{{ memory ? formatBytes(memory.vmem_total_used) : '—' }} / {{ memory ? formatBytes(memory.vmem_total) : '—' }}</dd></div></dl></div>
         </div>
+      </section>
+      <section v-show="tab === 'update'" aria-labelledby="update-title">
+        <SystemUpdate :controller="c" :active="tab === 'update'" :connected="connected" :demo="demo" :configured-password="configuredPassword" @connection="tab = 'connection'" />
       </section>
     </main>
     <footer class="app-footer"><div v-if="error || message" class="feedback" :class="{ 'has-error': !!error }" :role="error ? 'alert' : 'status'" aria-live="polite">{{ error || message }}</div><div class="footer-meta">version {{ buildVersion }}</div></footer>
