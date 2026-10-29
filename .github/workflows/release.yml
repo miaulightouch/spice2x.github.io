@@ -27,6 +27,17 @@ jobs:
           rm -rf .ccache dist bin cmake-build-*
       - name: Compile
         run: ./build_docker.sh
+      - name: Sign release executables when configured
+        env:
+          OTA_SIGNING_PFX: ${{ secrets.OTA_SIGNING_PFX }}
+          OTA_SIGNING_PASSWORD: ${{ secrets.OTA_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$OTA_SIGNING_PFX" ]; then
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends osslsigncode
+          bash ./sign_release.sh
       - name: Determine release name from dist filename
         run: |
           dist=$(basename "$(ls dist/spice2x-*.zip | grep -v -- '-full.zip')")
