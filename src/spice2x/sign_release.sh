@@ -6,10 +6,6 @@ umask 077
 if [[ -z "${OTA_SIGNING_PFX:-}" ]]; then
     exit 0
 fi
-if [[ -z "${OTA_SIGNING_PASSWORD+x}" ]]; then
-    echo "OTA_SIGNING_PFX is set but OTA_SIGNING_PASSWORD is missing" >&2
-    exit 1
-fi
 
 if ! command -v osslsigncode >/dev/null 2>&1; then
     echo "OTA_SIGNING_PFX is set but osslsigncode is unavailable" >&2
@@ -26,38 +22,27 @@ if ! printf '%s' "$OTA_SIGNING_PFX" | base64 --decode >"$pfx"; then
     echo "OTA_SIGNING_PFX is not valid base64" >&2
     exit 1
 fi
-password_file="$work/password"
-printf '%s\n' "$OTA_SIGNING_PASSWORD" >"$password_file"
-
-# Fail before touching a release binary when the PFX is malformed, the password
-# is wrong, or its public key is not the key pinned by the native verifier.
+# Reject malformed PFX files or a public key that does not match the verifier.
 pinned_key_sha1=9ad5080b3935e589f1df340da93b7fa99de6409d
 certificate="$work/signing-cert.pem"
-if ! openssl pkcs12 -in "$pfx" -clcerts -nokeys -passin "file:$password_file" \
+if ! openssl pkcs12 -in "$pfx" -clcerts -nokeys -passin pass: \
         -out "$certificate" 2>/dev/null; then
-    openssl pkcs12 -legacy -in "$pfx" -clcerts -nokeys -passin "file:$password_file" \
+    openssl pkcs12 -legacy -in "$pfx" -clcerts -nokeys -passin pass: \
         -out "$certificate" 2>/dev/null || {
-        echo "could not read OTA signing PFX (check OTA_SIGNING_PASSWORD)" >&2
+        echo "could not read passwordless OTA signing PFX" >&2
         exit 1
     }
 fi
 actual_key_sha1=$(openssl x509 -in "$certificate" -pubkey -noout 2>/dev/null \
     | openssl pkey -pubin -outform DER 2>/dev/null \
     | sha1sum | awk '{print $1}') || {
-    echo "could not read OTA signing PFX (check OTA_SIGNING_PASSWORD)" >&2
+    echo "could not read passwordless OTA signing PFX" >&2
     exit 1
 }
 if [[ "$actual_key_sha1" != "$pinned_key_sha1" ]]; then
     echo "OTA signing PFX public key does not match the pinned release key" >&2
     exit 1
 fi
-
-sign_help=$(osslsigncode sign --help 2>&1 || true)
-if [[ "$sign_help" != *"-readpass"* ]]; then
-    echo "osslsigncode must support -readpass to protect OTA_SIGNING_PASSWORD" >&2
-    exit 1
-fi
-sign_password_args=(-readpass "$password_file")
 
 signed_sources=()
 signed_outputs=()
@@ -66,7 +51,7 @@ sign_one() {
     [[ -f "$source" ]] || return 0
 
     local output="$work/signed-${#signed_sources[@]}-$(basename "$source")"
-    if ! osslsigncode sign -pkcs12 "$pfx" "${sign_password_args[@]}" \
+    if ! osslsigncode sign -pkcs12 "$pfx" -pass "" \
             -h sha1 -in "$source" -out "$output" >/dev/null; then
         echo "could not sign $(basename "$source")" >&2
         exit 1

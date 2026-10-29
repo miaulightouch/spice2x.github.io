@@ -188,7 +188,7 @@ def compile_test(include_root: Path) -> Path:
 
 
 def test_release_archive_update(signed: Path, certificate: Path, key: Path,
-                                pfx: Path, password: str) -> None:
+                                pfx: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="release-script-", dir=BUILD) as temporary:
         sandbox = Path(temporary)
         script_root = sandbox / "src" / "spice2x"
@@ -228,7 +228,6 @@ def test_release_archive_update(signed: Path, certificate: Path, key: Path,
         fake_signer = fake_bin / "osslsigncode"
         fake_signer.write_text(
             "#!/usr/bin/env bash\n"
-            "if [[ \"$1\" == sign && \"$2\" == --help ]]; then echo -readpass; exit 0; fi\n"
             "input= output=\n"
             "while (($#)); do case $1 in -in) input=$2; shift 2;; -out) output=$2; shift 2;; *) shift;; esac; done\n"
             "[[ -n \"$input\" && -n \"$output\" ]] && cp -p \"$input\" \"$output\"\n",
@@ -269,8 +268,8 @@ def test_release_archive_update(signed: Path, certificate: Path, key: Path,
             **os.environ,
             "PATH": str(fake_bin) + os.pathsep + os.environ.get("PATH", ""),
             "OTA_SIGNING_PFX": base64.b64encode(pfx.read_bytes()).decode("ascii"),
-            "OTA_SIGNING_PASSWORD": password,
         }
+        environment.pop("OTA_SIGNING_PASSWORD", None)
         run([str(script)], cwd=script_root, env=environment)
 
         expected = signed.read_bytes()
@@ -293,31 +292,22 @@ def test_release_archive_update(signed: Path, certificate: Path, key: Path,
                     assert info.file_size == len(data)
                     assert info.CRC == zlib.crc32(data) & 0xffffffff
 
-        missing_password = dict(environment)
-        del missing_password["OTA_SIGNING_PASSWORD"]
+        protected_pfx = sandbox / "password-protected.pfx"
+        make_pfx(certificate, key, protected_pfx, "fixture-password")
+        protected_environment = dict(environment)
+        protected_environment["OTA_SIGNING_PFX"] = base64.b64encode(protected_pfx.read_bytes()).decode("ascii")
+        protected_environment["OTA_SIGNING_PASSWORD"] = "fixture-password"
         failed = subprocess.run(
             [str(script)], cwd=script_root,
-            env=missing_password, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=protected_environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         assert failed.returncode != 0
+        for path in windows_files:
+            assert path.read_bytes() == expected
 
-        wrong_password = dict(environment)
-        wrong_password["OTA_SIGNING_PASSWORD"] = "wrong-password"
-        failed = subprocess.run(
-            [str(script)], cwd=script_root,
-            env=wrong_password, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        assert failed.returncode != 0
-
-        empty_pfx = sandbox / "empty-password.pfx"
-        run([
-            "openssl", "pkcs12", "-export", "-inkey", str(key),
-            "-in", str(certificate), "-out", str(empty_pfx), "-passout", "pass:",
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        empty_environment = dict(environment)
-        empty_environment["OTA_SIGNING_PFX"] = base64.b64encode(empty_pfx.read_bytes()).decode("ascii")
-        empty_environment["OTA_SIGNING_PASSWORD"] = ""
-        run([str(script)], cwd=script_root, env=empty_environment)
+        stale_environment = dict(environment)
+        stale_environment["OTA_SIGNING_PASSWORD"] = "unused-password"
+        run([str(script)], cwd=script_root, env=stale_environment)
 
 
 def main() -> int:
@@ -338,7 +328,7 @@ def main() -> int:
         fixture = Path(temporary)
         cert, key = make_certificate(fixture, "/C=TW/O=Fixture/CN=OTA Fixture")
         pfx = fixture / "signing.pfx"
-        make_pfx(cert, key, pfx, "fixture-password")
+        make_pfx(cert, key, pfx, "")
         include_root = public_key_pin_header(cert, fixture / "include")
         executable = compile_test(include_root)
         unsigned = BUILD / "unsigned.exe"
@@ -351,8 +341,8 @@ def main() -> int:
             return 0
 
         signed = BUILD / "signed-real.exe"
-        sign_with_osslsigncode(signer, unsigned, signed, pfx, "fixture-password")
-        test_release_archive_update(signed, cert, key, pfx, "fixture-password")
+        sign_with_osslsigncode(signer, unsigned, signed, pfx, "")
+        test_release_archive_update(signed, cert, key, pfx)
         mutated_code = BUILD / "mutated-code.exe"
         mutated_pkcs7 = BUILD / "mutated-pkcs7.exe"
         mutate_code(signed, mutated_code)
