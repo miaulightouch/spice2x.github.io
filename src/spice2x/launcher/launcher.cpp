@@ -122,6 +122,7 @@
 #include "util/fileutils.h"
 #include "util/libutils.h"
 #include "util/logging.h"
+#include "util/ota_update.h"
 #include "util/peb.h"
 #include "util/precise_timer.h"
 #include "util/socd_cleaner.h"
@@ -178,6 +179,9 @@ void dump_button_bindings(std::vector<Button> *buttons);
 void dump_analog_bindings();
 
 int main_implementation(int argc, char *argv[]) {
+
+    int update_exit_code = 0;
+    if (ota::run_update_helper(argc, argv, update_exit_code)) return update_exit_code;
 
     // remember argv, argv
     LAUNCHER_ARGC = argc;
